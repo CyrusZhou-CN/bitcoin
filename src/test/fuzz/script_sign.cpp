@@ -13,6 +13,7 @@
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
+#include <util/translation.h>
 
 #include <cassert>
 #include <cstdint>
@@ -22,14 +23,14 @@
 #include <string>
 #include <vector>
 
-void initialize()
+void initialize_script_sign()
 {
     static const ECCVerifyHandle ecc_verify_handle;
     ECC_Start();
     SelectParams(CBaseChainParams::REGTEST);
 }
 
-void test_one_input(const std::vector<uint8_t>& buffer)
+FUZZ_TARGET_INIT(script_sign, initialize_script_sign)
 {
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
     const std::vector<uint8_t> key = ConsumeRandomLengthByteVector(fuzzed_data_provider, 128);
@@ -135,7 +136,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
                 }
                 coins[*outpoint] = *coin;
             }
-            std::map<int, std::string> input_errors;
+            std::map<int, bilingual_str> input_errors;
             (void)SignTransaction(sign_transaction_tx_to, &provider, coins, fuzzed_data_provider.ConsumeIntegral<int>(), input_errors);
         }
     }

@@ -95,7 +95,7 @@ def read_dump(file_name, addrs, script_addrs, hd_master_addr_old):
 class WalletDumpTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
-        self.extra_args = [["-keypool=90", "-addresstype=legacy", "-wallet=dump"]]
+        self.extra_args = [["-keypool=90", "-addresstype=legacy"]]
         self.rpc_timeout = 120
 
     def skip_test_if_missing_module(self):
@@ -106,6 +106,8 @@ class WalletDumpTest(BitcoinTestFramework):
         self.start_nodes()
 
     def run_test(self):
+        self.nodes[0].createwallet("dump")
+
         wallet_unenc_dump = os.path.join(self.nodes[0].datadir, "wallet.unencrypted.dump")
         wallet_enc_dump = os.path.join(self.nodes[0].datadir, "wallet.encrypted.dump")
 
@@ -190,7 +192,8 @@ class WalletDumpTest(BitcoinTestFramework):
         assert_raises_rpc_error(-8, "already exists", lambda: self.nodes[0].dumpwallet(wallet_enc_dump))
 
         # Restart node with new wallet, and test importwallet
-        self.restart_node(0, ['-wallet=w2'])
+        self.restart_node(0)
+        self.nodes[0].createwallet("w2")
 
         # Make sure the address is not IsMine before import
         result = self.nodes[0].getaddressinfo(multisig_addr)
@@ -206,6 +209,15 @@ class WalletDumpTest(BitcoinTestFramework):
         with self.nodes[0].assert_debug_log(['Flushing wallet.dat'], timeout=20):
             self.nodes[0].getnewaddress()
 
+        # Make sure that dumpwallet doesn't have a lock order issue when there is an unconfirmed tx and it is reloaded
+        # See https://github.com/bitcoin/bitcoin/issues/22489
+        self.nodes[0].createwallet("w3")
+        w3 = self.nodes[0].get_wallet_rpc("w3")
+        w3.importprivkey(privkey=self.nodes[0].get_deterministic_priv_key().key, label="coinbase_import")
+        w3.sendtoaddress(w3.getnewaddress(), 10)
+        w3.unloadwallet()
+        self.nodes[0].loadwallet("w3")
+        w3.dumpwallet(os.path.join(self.nodes[0].datadir, "w3.dump"))
 
 if __name__ == '__main__':
     WalletDumpTest().main()
