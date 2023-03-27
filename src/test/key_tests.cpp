@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2020 The Bitcoin Core developers
+// Copyright (c) 2012-2022 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -6,6 +6,7 @@
 
 #include <key_io.h>
 #include <streams.h>
+#include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
 #include <util/strencodings.h>
@@ -204,9 +205,8 @@ BOOST_AUTO_TEST_CASE(key_key_negation)
     // create a dummy hash for signature comparison
     unsigned char rnd[8];
     std::string str = "Bitcoin key verification\n";
-    GetRandBytes(rnd, sizeof(rnd));
-    uint256 hash;
-    CHash256().Write(MakeUCharSpan(str)).Write(rnd).Finalize(hash);
+    GetRandBytes(rnd);
+    uint256 hash{Hash(str, rnd)};
 
     // import the static test key
     CKey key = DecodeSecret(strSecret1C);
@@ -233,7 +233,7 @@ BOOST_AUTO_TEST_CASE(key_key_negation)
 
 static CPubKey UnserializePubkey(const std::vector<uint8_t>& data)
 {
-    CDataStream stream{SER_NETWORK, INIT_PROTO_VERSION};
+    DataStream stream{};
     stream << data;
     CPubKey pubkey;
     stream >> pubkey;
@@ -251,7 +251,7 @@ static unsigned int GetLen(unsigned char chHeader)
 
 static void CmpSerializationPubkey(const CPubKey& pubkey)
 {
-    CDataStream stream{SER_NETWORK, INIT_PROTO_VERSION};
+    DataStream stream{};
     stream << pubkey;
     CPubKey pubkey2;
     stream >> pubkey2;
@@ -321,7 +321,7 @@ BOOST_AUTO_TEST_CASE(bip340_test_vectors)
         key.Set(sec.begin(), sec.end(), true);
         XOnlyPubKey pubkey(key.GetPubKey());
         BOOST_CHECK(std::equal(pubkey.begin(), pubkey.end(), pub.begin(), pub.end()));
-        bool ok = key.SignSchnorr(msg256, sig64, nullptr, &aux256);
+        bool ok = key.SignSchnorr(msg256, sig64, nullptr, aux256);
         BOOST_CHECK(ok);
         BOOST_CHECK(std::vector<unsigned char>(sig64, sig64 + 64) == sig);
         // Verify those signatures for good measure.
@@ -337,7 +337,7 @@ BOOST_AUTO_TEST_CASE(bip340_test_vectors)
             BOOST_CHECK(tweaked);
             XOnlyPubKey tweaked_key = tweaked->first;
             aux256 = InsecureRand256();
-            bool ok = key.SignSchnorr(msg256, sig64, &merkle_root, &aux256);
+            bool ok = key.SignSchnorr(msg256, sig64, &merkle_root, aux256);
             BOOST_CHECK(ok);
             BOOST_CHECK(tweaked_key.VerifySchnorr(msg256, sig64));
         }

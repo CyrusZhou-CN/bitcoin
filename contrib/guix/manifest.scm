@@ -16,21 +16,19 @@
              (gnu packages gawk)
              (gnu packages gcc)
              (gnu packages gnome)
-             (gnu packages image)
-             (gnu packages imagemagick)
              (gnu packages installers)
              (gnu packages linux)
              (gnu packages llvm)
              (gnu packages mingw)
              (gnu packages moreutils)
-             (gnu packages perl)
              (gnu packages pkg-config)
              (gnu packages python)
+             (gnu packages python-crypto)
              (gnu packages python-web)
              (gnu packages shells)
              (gnu packages tls)
              (gnu packages version-control)
-             (guix build-system font)
+             (guix build-system cmake)
              (guix build-system gnu)
              (guix build-system python)
              (guix build-system trivial)
@@ -80,9 +78,10 @@ http://www.linuxfromscratch.org/hlfs/view/development/chapter05/gcc-pass1.html"
                  (("-rpath=") "-rpath-link="))
                #t))))))))
 
-(define (make-binutils-with-mingw-w64-disable-flags xbinutils)
-  (package-with-extra-patches xbinutils
-    (search-our-patches "binutils-mingw-w64-disable-flags.patch")))
+(define building-on (string-append (list-ref (string-split (%current-system) #\-) 0) "-guix-linux-gnu"))
+
+(define (explicit-cross-configure package)
+  (package-with-extra-configure-variable package "--build" building-on))
 
 (define (make-cross-toolchain target
                               base-gcc-for-libc
@@ -93,9 +92,9 @@ http://www.linuxfromscratch.org/hlfs/view/development/chapter05/gcc-pass1.html"
   (let* ((xbinutils (cross-binutils target))
          ;; 1. Build a cross-compiling gcc without targeting any libc, derived
          ;; from BASE-GCC-FOR-LIBC
-         (xgcc-sans-libc (cross-gcc target
-                                    #:xgcc base-gcc-for-libc
-                                    #:xbinutils xbinutils))
+         (xgcc-sans-libc (explicit-cross-configure (cross-gcc target
+                                                              #:xgcc base-gcc-for-libc
+                                                              #:xbinutils xbinutils)))
          ;; 2. Build cross-compiled kernel headers with XGCC-SANS-LIBC, derived
          ;; from BASE-KERNEL-HEADERS
          (xkernel (cross-kernel-headers target
@@ -104,17 +103,17 @@ http://www.linuxfromscratch.org/hlfs/view/development/chapter05/gcc-pass1.html"
                                         xbinutils))
          ;; 3. Build a cross-compiled libc with XGCC-SANS-LIBC and XKERNEL,
          ;; derived from BASE-LIBC
-         (xlibc (cross-libc target
-                            base-libc
-                            xgcc-sans-libc
-                            xbinutils
-                            xkernel))
+         (xlibc (explicit-cross-configure (cross-libc target
+                                                      base-libc
+                                                      xgcc-sans-libc
+                                                      xbinutils
+                                                      xkernel)))
          ;; 4. Build a cross-compiling gcc targeting XLIBC, derived from
          ;; BASE-GCC
-         (xgcc (cross-gcc target
-                          #:xgcc base-gcc
-                          #:xbinutils xbinutils
-                          #:libc xlibc)))
+         (xgcc (explicit-cross-configure (cross-gcc target
+                                                    #:xgcc base-gcc
+                                                    #:xbinutils xbinutils
+                                                    #:libc xlibc))))
     ;; Define a meta-package that propagates the resulting XBINUTILS, XLIBC, and
     ;; XGCC
     (package
@@ -135,30 +134,24 @@ chain for " target " development."))
       (home-page (package-home-page xgcc))
       (license (package-license xgcc)))))
 
-(define base-gcc
-  (package-with-extra-patches gcc-8
-    (search-our-patches "gcc-8-sort-libtool-find-output.patch")))
+(define base-gcc gcc-10)
+(define base-linux-kernel-headers linux-libre-headers-5.15)
 
-;; Building glibc with stack smashing protector first landed in glibc 2.25, use
-;; this function to disable for older glibcs
-;;
-;; From glibc 2.25 changelog:
-;;
-;;   * Most of glibc can now be built with the stack smashing protector enabled.
-;;     It is recommended to build glibc with --enable-stack-protector=strong.
-;;     Implemented by Nick Alcock (Oracle).
-(define (make-glibc-without-ssp xglibc)
-  (package-with-extra-configure-variable
-   (package-with-extra-configure-variable
-    xglibc "libc_cv_ssp" "no")
-   "libc_cv_ssp_strong" "no"))
+;; https://gcc.gnu.org/install/configure.html
+(define (hardened-gcc gcc)
+  (package-with-extra-configure-variable (
+    package-with-extra-configure-variable (
+      package-with-extra-configure-variable gcc
+      "--enable-initfini-array" "yes")
+      "--enable-default-ssp" "yes")
+      "--enable-default-pie" "yes"))
 
 (define* (make-bitcoin-cross-toolchain target
                                        #:key
-                                       (base-gcc-for-libc gcc-7)
-                                       (base-kernel-headers linux-libre-headers-4.9)
-                                       (base-libc (make-glibc-without-ssp glibc-2.24))
-                                       (base-gcc (make-gcc-rpath-link base-gcc)))
+                                       (base-gcc-for-libc base-gcc)
+                                       (base-kernel-headers base-linux-kernel-headers)
+                                       (base-libc (hardened-glibc glibc-2.27))
+                                       (base-gcc (make-gcc-rpath-link (hardened-gcc base-gcc))))
   "Convenience wrapper around MAKE-CROSS-TOOLCHAIN with default values
 desirable for building Bitcoin Core release binaries."
   (make-cross-toolchain target
@@ -168,15 +161,23 @@ desirable for building Bitcoin Core release binaries."
                         base-gcc))
 
 (define (make-gcc-with-pthreads gcc)
-  (package-with-extra-configure-variable gcc "--enable-threads" "posix"))
+  (package-with-extra-configure-variable
+    (package-with-extra-patches gcc
+      (search-our-patches "gcc-10-remap-guix-store.patch"))
+    "--enable-threads" "posix"))
+
+(define (make-mingw-w64-cross-gcc cross-gcc)
+  (package-with-extra-patches cross-gcc
+    (search-our-patches "vmov-alignment.patch"
+                        "gcc-broken-longjmp.patch")))
 
 (define (make-mingw-pthreads-cross-toolchain target)
   "Create a cross-compilation toolchain package for TARGET"
-  (let* ((xbinutils (make-binutils-with-mingw-w64-disable-flags (cross-binutils target)))
+  (let* ((xbinutils (cross-binutils target))
          (pthreads-xlibc mingw-w64-x86_64-winpthreads)
          (pthreads-xgcc (make-gcc-with-pthreads
                          (cross-gcc target
-                                    #:xgcc (make-ssp-fixed-gcc base-gcc)
+                                    #:xgcc (make-ssp-fixed-gcc (make-mingw-w64-cross-gcc base-gcc))
                                     #:xbinutils xbinutils
                                     #:libc pthreads-xlibc))))
     ;; Define a meta-package that propagates the resulting XBINUTILS, XLIBC, and
@@ -198,76 +199,67 @@ chain for " target " development."))
       (home-page (package-home-page pthreads-xgcc))
       (license (package-license pthreads-xgcc)))))
 
-(define (make-nsis-with-sde-support base-nsis)
+(define (make-nsis-for-gcc-10 base-nsis)
   (package-with-extra-patches base-nsis
-    (search-our-patches "nsis-SConstruct-sde-support.patch")))
+    (search-our-patches "nsis-gcc-10-memmove.patch"
+                        "nsis-disable-installer-reloc.patch")))
 
-(define-public font-tuffy
+(define (fix-ppc64-nx-default lief)
+  (package-with-extra-patches lief
+    (search-our-patches "lief-fix-ppc64-nx-default.patch")))
+
+;; Our python-lief package can be removed once we are using
+;; guix 83bfdb409787cb2737e68b093a319b247b7858e6 or later.
+;; Note we currently use cmake-minimal.
+(define-public python-lief
   (package
-    (name "font-tuffy")
-    (version "20120614")
-    (source
-     (origin
-       (method url-fetch)
-       (uri (string-append "http://tulrich.com/fonts/tuffy-" version ".tar.gz"))
-       (file-name (string-append name "-" version ".tar.gz"))
-       (sha256
-        (base32
-         "02vf72bgrp30vrbfhxjw82s115z27dwfgnmmzfb0n9wfhxxfpyf6"))))
-    (build-system font-build-system)
-    (home-page "http://tulrich.com/fonts/")
-    (synopsis "The Tuffy Truetype Font Family")
+    (name "python-lief")
+    (version "0.12.3")
+    (source (origin
+              (method git-fetch)
+              (uri (git-reference
+                    (url "https://github.com/lief-project/LIEF")
+                    (commit version)))
+              (file-name (git-file-name name version))
+              (sha256
+               (base32
+                "11i6hqmcjh56y554kqhl61698n9v66j2qk1c1g63mv2w07h2z661"))))
+    (build-system python-build-system)
+    (native-inputs (list cmake-minimal))
+    (arguments
+     (list
+      #:tests? #f                  ;needs network
+      #:phases #~(modify-phases %standard-phases
+                   (replace 'build
+                     (lambda _
+                       (invoke
+                        "python" "setup.py" "--sdk" "build"
+                        (string-append
+                         "-j" (number->string (parallel-job-count)))))))))
+    (home-page "https://github.com/lief-project/LIEF")
+    (synopsis "Library to instrument executable formats")
     (description
-     "Thatcher Ulrich's first outline font design. He started with the goal of producing a neutral, readable sans-serif text font. There are lots of \"expressive\" fonts out there, but he wanted to start with something very plain and clean, something he might want to actually use. ")
-    (license license:public-domain)))
-
-(define-public lief
-  (package
-   (name "python-lief")
-   (version "0.11.5")
-   (source
-    (origin
-     (method git-fetch)
-     (uri (git-reference
-           (url "https://github.com/lief-project/LIEF.git")
-           (commit version)))
-     (file-name (git-file-name name version))
-     (sha256
-      (base32
-       "0qahjfg1n0x76ps2mbyljvws1l3qhkqvmxqbahps4qgywl2hbdkj"))))
-   (build-system python-build-system)
-   (native-inputs
-    `(("cmake" ,cmake)))
-   (home-page "https://github.com/lief-project/LIEF")
-   (synopsis "Library to Instrument Executable Formats")
-   (description "Python library to to provide a cross platform library which can
-parse, modify and abstract ELF, PE and MachO formats.")
-   (license license:asl2.0)))
+     "@code{python-lief} is a cross platform library which can parse, modify
+and abstract ELF, PE and MachO formats.")
+    (license license:asl2.0)))
 
 (define osslsigncode
   (package
     (name "osslsigncode")
-    (version "2.0")
+    (version "2.5")
     (source (origin
               (method url-fetch)
               (uri (string-append "https://github.com/mtrojnar/"
                                   name "/archive/" version ".tar.gz"))
               (sha256
                (base32
-                "0byri6xny770wwb2nciq44j5071122l14bvv65axdd70nfjf0q2s"))))
-    (build-system gnu-build-system)
-    (native-inputs
-     `(("pkg-config" ,pkg-config)
-       ("autoconf" ,autoconf)
-       ("automake" ,automake)
-       ("libtool" ,libtool)))
+                "03by9706gg0an6dn48pljx38vcb76ziv11bgm8ilwsf293x2k4hv"))))
+    (build-system cmake-build-system)
     (inputs
-     `(("openssl" ,openssl)))
+     `(("openssl", openssl)))
     (arguments
-     `(#:configure-flags
-       `("--without-gsf"
-         "--without-curl"
-         "--disable-dependency-tracking")))
+     '(#:configure-flags
+        (list "-DCMAKE_DISABLE_FIND_PACKAGE_CURL=TRUE")))
     (home-page "https://github.com/mtrojnar/osslsigncode")
     (synopsis "Authenticode signing and timestamping tool")
     (description "osslsigncode is a small tool that implements part of the
@@ -276,36 +268,8 @@ signing and timestamping. But osslsigncode is based on OpenSSL and cURL, and
 thus should be able to compile on most platforms where these exist.")
     (license license:gpl3+))) ; license is with openssl exception
 
-(define-public python-asn1crypto
-  (package
-    (name "python-asn1crypto")
-    (version "1.4.0")
-    (source
-     (origin
-       (method git-fetch)
-       (uri (git-reference
-             (url "https://github.com/wbond/asn1crypto")
-             (commit version)))
-       (file-name (git-file-name name version))
-       (sha256
-        (base32
-         "19abibn6jw20mzi1ln4n9jjvpdka8ygm4m439hplyrdfqbvgm01r"))))
-    (build-system python-build-system)
-    (arguments
-     '(#:phases
-       (modify-phases %standard-phases
-         (replace 'check
-           (lambda _
-             (invoke "python" "run.py" "tests"))))))
-    (home-page "https://github.com/wbond/asn1crypto")
-    (synopsis "ASN.1 parser and serializer in Python")
-    (description "asn1crypto is an ASN.1 parser and serializer with definitions
-for private keys, public keys, certificates, CRL, OCSP, CMS, PKCS#3, PKCS#7,
-PKCS#8, PKCS#12, PKCS#5, X.509 and TSP.")
-    (license license:expat)))
-
 (define-public python-elfesteem
-  (let ((commit "87bbd79ab7e361004c98cc8601d4e5f029fd8bd5"))
+  (let ((commit "2eb1e5384ff7a220fd1afacd4a0170acff54fe56"))
     (package
       (name "python-elfesteem")
       (version (git-version "0.1" "1" commit))
@@ -318,7 +282,7 @@ PKCS#8, PKCS#12, PKCS#5, X.509 and TSP.")
          (file-name (git-file-name name commit))
          (sha256
           (base32
-           "1nyvjisvyxyxnd0023xjf5846xd03lwawp5pfzr8vrky7wwm5maz"))))
+           "07x6p8clh11z8s1n2kdxrqwqm2almgc5qpkcr9ckb6y5ivjdr5r6"))))
       (build-system python-build-system)
       ;; There are no tests, but attempting to run python setup.py test leads to
       ;; PYTHONPATH problems, just disable the test
@@ -390,6 +354,8 @@ PKCS#8, PKCS#12, PKCS#5, X.509 and TSP.")
 (define-public python-oscryptotests
   (package (inherit python-oscrypto)
     (name "python-oscryptotests")
+    (propagated-inputs
+      `(("python-oscrypto" ,python-oscrypto)))
     (arguments
      `(#:tests? #f
        #:phases
@@ -400,7 +366,7 @@ PKCS#8, PKCS#12, PKCS#5, X.509 and TSP.")
              #t)))))))
 
 (define-public python-certvalidator
-  (let ((commit "e5bdb4bfcaa09fa0af355eb8867d00dfeecba08c"))
+  (let ((commit "a145bf25eb75a9f014b3e7678826132efbba6213"))
     (package
       (name "python-certvalidator")
       (version (git-version "0.1" "1" commit))
@@ -413,7 +379,7 @@ PKCS#8, PKCS#12, PKCS#5, X.509 and TSP.")
          (file-name (git-file-name name commit))
          (sha256
           (base32
-           "18pvxkvpkfkzgvfylv0kx65pmxfcv1hpsg03cip93krfvrrl4c75"))))
+           "1qw2k7xis53179lpqdqyylbcmp76lj7sagp883wmxg5i7chhc96k"))))
       (build-system python-build-system)
       (propagated-inputs
        `(("python-asn1crypto" ,python-asn1crypto)
@@ -449,6 +415,11 @@ PKCS#8, PKCS#12, PKCS#5, X.509 and TSP.")
                   (string-append indent
                                  "@unittest.skip(\"Disabled by Guix\")\n"
                                  line)))
+               (substitute* "tests/test_validate.py"
+                 (("^(.*)def test_revocation_mode_soft" line indent)
+                  (string-append indent
+                                 "@unittest.skip(\"Disabled by Guix\")\n"
+                                 line)))
                #t))
            (replace 'check
              (lambda _
@@ -460,16 +431,6 @@ PKCS#8, PKCS#12, PKCS#5, X.509 and TSP.")
 certificates or paths. Supports various options, including: validation at a
 specific moment in time, whitelisting and revocation checks.")
       (license license:expat))))
-
-(define-public python-requests-2.25.1
-  (package (inherit python-requests)
-    (version "2.25.1")
-    (source (origin
-              (method url-fetch)
-              (uri (pypi-uri "requests" version))
-              (sha256
-               (base32
-                "015qflyqsgsz09gnar69s6ga74ivq5kch69s4qxz3904m7a3v5r7"))))))
 
 (define-public python-altgraph
   (package
@@ -543,7 +504,7 @@ and endian independent.")
     (license license:expat)))
 
 (define-public python-signapple
-  (let ((commit "b084cbbf44d5330448ffce0c7d118f75781b64bd"))
+  (let ((commit "8a945a2e7583be2665cf3a6a89d665b70ecd1ab6"))
     (package
       (name "python-signapple")
       (version (git-version "0.1" "1" commit))
@@ -556,16 +517,15 @@ and endian independent.")
          (file-name (git-file-name name commit))
          (sha256
           (base32
-           "0k7inccl2mzac3wq4asbr0kl8s4cghm8982z54kfascqg45shv01"))))
+           "0fr1hangvfyiwflca6jg5g8zvg3jc9qr7vd2c12ff89pznf38dlg"))))
       (build-system python-build-system)
       (propagated-inputs
        `(("python-asn1crypto" ,python-asn1crypto)
          ("python-oscrypto" ,python-oscrypto)
          ("python-certvalidator" ,python-certvalidator)
          ("python-elfesteem" ,python-elfesteem)
-         ("python-requests" ,python-requests-2.25.1)
-         ("python-macholib" ,python-macholib)
-         ("libcrypto" ,openssl)))
+         ("python-requests" ,python-requests)
+         ("python-macholib" ,python-macholib)))
       ;; There are no tests, but attempting to run python setup.py test leads to
       ;; problems, just disable the test
       (arguments '(#:tests? #f))
@@ -575,34 +535,42 @@ and endian independent.")
 inspecting signatures in Mach-O binaries.")
       (license license:expat))))
 
-(define-public glibc-2.24
+;; https://www.gnu.org/software/libc/manual/html_node/Configuring-and-compiling.html
+;; We don't use --disable-werror directly, as that would be passed through to bash,
+;; and cause it's build to fail.
+(define (hardened-glibc glibc)
+  (package-with-extra-configure-variable (
+    package-with-extra-configure-variable (
+      package-with-extra-configure-variable glibc
+      "enable_werror" "no")
+      "--enable-stack-protector" "all")
+      "--enable-bind-now" "yes"))
+
+(define-public glibc-2.27
   (package
-    (inherit glibc)
-    (version "2.24")
+    (inherit glibc-2.31)
+    (version "2.27")
     (source (origin
               (method git-fetch)
               (uri (git-reference
                     (url "https://sourceware.org/git/glibc.git")
-                    (commit "0d7f1ed30969886c8dde62fbf7d2c79967d4bace")))
-              (file-name (git-file-name "glibc" "0d7f1ed30969886c8dde62fbf7d2c79967d4bace"))
+                    (commit "73886db6218e613bd6d4edf529f11e008a6c2fa6")))
+              (file-name (git-file-name "glibc" "73886db6218e613bd6d4edf529f11e008a6c2fa6"))
               (sha256
                (base32
-                "0g5hryia5v1k0qx97qffgwzrz4lr4jw3s5kj04yllhswsxyjbic3"))
+                "0azpb9cvnbv25zg8019rqz48h8i2257ngyjg566dlnp74ivrs9vq"))
               (patches (search-our-patches "glibc-ldd-x86_64.patch"
                                            "glibc-versioned-locpath.patch"
-                                           "glibc-2.24-elfm-loadaddr-dynamic-rewrite.patch"
-                                           "glibc-2.24-no-build-time-cxx-header-run.patch"))))))
-
-(define glibc-2.27/bitcoin-patched
-  (package-with-extra-patches glibc-2.27
-    (search-our-patches "glibc-2.27-riscv64-Use-__has_include__-to-include-asm-syscalls.h.patch")))
+                                           "glibc-2.27-riscv64-Use-__has_include-to-include-asm-syscalls.h.patch"
+                                           "glibc-2.27-fcommon.patch"
+                                           "glibc-2.27-guix-prefix.patch"))))))
 
 (packages->manifest
  (append
   (list ;; The Basics
-        bash
+        bash-minimal
         which
-        coreutils
+        coreutils-minimal
         util-linux
         ;; File(system) inspection
         file
@@ -619,39 +587,32 @@ inspecting signatures in Mach-O binaries.")
         bzip2
         gzip
         xz
-        zlib
-        (list zlib "static")
         ;; Build tools
         gnu-make
-        libtool
-        autoconf
+        libtool-2.4.7
+        autoconf-2.71
         automake
         pkg-config
         bison
+        ;; Native GCC 10 toolchain
+        gcc-toolchain-10
+        (list gcc-toolchain-10 "static")
         ;; Scripting
-        perl
         python-3
         ;; Git
-        git
+        git-minimal
         ;; Tests
-        lief
-        ;; Native gcc 7 toolchain
-        gcc-toolchain-7
-        (list gcc-toolchain-7 "static"))
+        (fix-ppc64-nx-default python-lief))
   (let ((target (getenv "HOST")))
     (cond ((string-suffix? "-mingw32" target)
            ;; Windows
            (list zip
                  (make-mingw-pthreads-cross-toolchain "x86_64-w64-mingw32")
-                 (make-nsis-with-sde-support nsis-x86_64)
+                 (make-nsis-for-gcc-10 nsis-x86_64)
+                 nss-certs
                  osslsigncode))
           ((string-contains target "-linux-")
-           (list (cond ((string-contains target "riscv64-")
-                        (make-bitcoin-cross-toolchain target
-                                                      #:base-libc glibc-2.27/bitcoin-patched
-                                                      #:base-kernel-headers linux-libre-headers-4.19))
-                       (else
-                        (make-bitcoin-cross-toolchain target)))))
+           (list (make-bitcoin-cross-toolchain target)))
           ((string-contains target "darwin")
-           (list clang-toolchain-10 binutils imagemagick libtiff librsvg font-tuffy cmake xorriso python-signapple))
+           (list clang-toolchain-10 binutils cmake-minimal xorriso python-signapple))
           (else '())))))

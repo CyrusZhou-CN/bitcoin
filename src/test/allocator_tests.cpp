@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2019 The Bitcoin Core developers
+// Copyright (c) 2012-2021 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -77,6 +77,7 @@ BOOST_AUTO_TEST_CASE(arena_tests)
     b.walk();
 #endif
     // Sweeping allocate all memory
+    addr.reserve(2048);
     for (int x=0; x<1024; ++x)
         addr.push_back(b.alloc(1024));
     BOOST_CHECK(b.stats().free == 0);
