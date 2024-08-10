@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 The Bitcoin Core developers
+// Copyright (c) 2019-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -49,35 +49,37 @@ inline bilingual_str Untranslated(std::string original) { return {original, orig
 
 // Provide an overload of tinyformat::format which can take bilingual_str arguments.
 namespace tinyformat {
-inline std::string TranslateArg(const bilingual_str& arg, bool translated)
-{
-    return translated ? arg.translated : arg.original;
-}
-
-template <typename T>
-inline T const& TranslateArg(const T& arg, bool translated)
-{
-    return arg;
-}
-
 template <typename... Args>
 bilingual_str format(const bilingual_str& fmt, const Args&... args)
 {
-    return bilingual_str{format(fmt.original, TranslateArg(args, false)...),
-                         format(fmt.translated, TranslateArg(args, true)...)};
+    const auto translate_arg{[](const auto& arg, bool translated) -> const auto& {
+        if constexpr (std::is_same_v<decltype(arg), const bilingual_str&>) {
+            return translated ? arg.translated : arg.original;
+        } else {
+            return arg;
+        }
+    }};
+    return bilingual_str{tfm::format(fmt.original, translate_arg(args, false)...),
+                         tfm::format(fmt.translated, translate_arg(args, true)...)};
 }
 } // namespace tinyformat
 
 /** Translate a message to the native language of the user. */
 const extern std::function<std::string(const char*)> G_TRANSLATION_FUN;
 
+struct ConstevalStringLiteral {
+    const char* const lit;
+    consteval ConstevalStringLiteral(const char* str) : lit{str} {}
+    consteval ConstevalStringLiteral(std::nullptr_t) = delete;
+};
+
 /**
  * Translation function.
  * If no translation function is set, simply return the input.
  */
-inline bilingual_str _(const char* psz)
+inline bilingual_str _(ConstevalStringLiteral str)
 {
-    return bilingual_str{psz, G_TRANSLATION_FUN ? (G_TRANSLATION_FUN)(psz) : psz};
+    return bilingual_str{str.lit, G_TRANSLATION_FUN ? (G_TRANSLATION_FUN)(str.lit) : str.lit};
 }
 
 #endif // BITCOIN_UTIL_TRANSLATION_H

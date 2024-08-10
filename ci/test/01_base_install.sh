@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 #
-# Copyright (c) 2018-2022 The Bitcoin Core developers
+# Copyright (c) 2018-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 export LC_ALL=C.UTF-8
 
+set -ex
+
+CFG_DONE="ci.base-install-done"  # Use a global git setting to remember whether this script ran to avoid running it twice
+
+if [ "$(git config --global ${CFG_DONE})" == "true" ]; then
+  echo "Skip base install"
+  exit 0
+fi
 
 if [ -n "$DPKG_ADD_ARCH" ]; then
   dpkg --add-architecture "$DPKG_ADD_ARCH"
 fi
 
 if [[ $CI_IMAGE_NAME_TAG == *centos* ]]; then
-  ${CI_RETRY_EXE} bash -c "dnf -y install epel-release"
-  ${CI_RETRY_EXE} bash -c "dnf -y --allowerasing install $CI_BASE_PACKAGES $PACKAGES"
-elif [ "$CI_USE_APT_INSTALL" != "no" ]; then
-  if [[ "${ADD_UNTRUSTED_BPFCC_PPA}" == "true" ]]; then
-    # Ubuntu 22.04 LTS and Debian 11 both have an outdated bpfcc-tools packages.
-    # The iovisor PPA is outdated as well. The next Ubuntu and Debian releases will contain updated
-    # packages. Meanwhile, use an untrusted PPA to install an up-to-date version of the bpfcc-tools
-    # package.
-    # TODO: drop this once we can use newer images in GCE
-    add-apt-repository ppa:hadret/bpfcc
-  fi
+  bash -c "dnf -y install epel-release"
+  bash -c "dnf -y --allowerasing install $CI_BASE_PACKAGES $PACKAGES"
+elif [ "$CI_OS_NAME" != "macos" ]; then
   if [[ -n "${APPEND_APT_SOURCES_LIST}" ]]; then
     echo "${APPEND_APT_SOURCES_LIST}" >> /etc/apt/sources.list
   fi
@@ -31,32 +31,50 @@ elif [ "$CI_USE_APT_INSTALL" != "no" ]; then
 fi
 
 if [ -n "$PIP_PACKAGES" ]; then
-  if [ "$CI_OS_NAME" == "macos" ]; then
-    sudo -H pip3 install --upgrade pip
-    # shellcheck disable=SC2086
-    IN_GETOPT_BIN="$(brew --prefix gnu-getopt)/bin/getopt" ${CI_RETRY_EXE} pip3 install --user $PIP_PACKAGES
-  else
-    # shellcheck disable=SC2086
-    ${CI_RETRY_EXE} pip3 install --user $PIP_PACKAGES
-  fi
+  # shellcheck disable=SC2086
+  ${CI_RETRY_EXE} pip3 install --user $PIP_PACKAGES
 fi
 
 if [[ ${USE_MEMORY_SANITIZER} == "true" ]]; then
-  update-alternatives --install /usr/bin/clang++ clang++ "$(which clang++-12)" 100
-  update-alternatives --install /usr/bin/clang clang "$(which clang-12)" 100
-  mkdir -p "${BASE_SCRATCH_DIR}"/msan/build/
-  git clone --depth=1 https://github.com/llvm/llvm-project -b llvmorg-12.0.0 "${BASE_SCRATCH_DIR}"/msan/llvm-project
-  cd "${BASE_SCRATCH_DIR}"/msan/build/ && cmake -DLLVM_ENABLE_PROJECTS='libcxx;libcxxabi' -DCMAKE_BUILD_TYPE=Release -DLLVM_USE_SANITIZER=MemoryWithOrigins -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLLVM_TARGETS_TO_BUILD=X86 ../llvm-project/llvm/
-  cd "${BASE_SCRATCH_DIR}"/msan/build/ && make "$MAKEJOBS" cxx
+  ${CI_RETRY_EXE} git clone --depth=1 https://github.com/llvm/llvm-project -b "llvmorg-18.1.3" /msan/llvm-project
+
+  cmake -G Ninja -B /msan/clang_build/ \
+    -DLLVM_ENABLE_PROJECTS="clang" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DLLVM_TARGETS_TO_BUILD=Native \
+    -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
+    -S /msan/llvm-project/llvm
+
+  ninja -C /msan/clang_build/ "-j$( nproc )"  # Use nproc, because MAKEJOBS is the default in docker image builds
+  ninja -C /msan/clang_build/ install-runtimes
+
+  update-alternatives --install /usr/bin/clang++ clang++ /msan/clang_build/bin/clang++ 100
+  update-alternatives --install /usr/bin/clang clang /msan/clang_build/bin/clang 100
+  update-alternatives --install /usr/bin/llvm-symbolizer llvm-symbolizer /msan/clang_build/bin/llvm-symbolizer 100
+
+  cmake -G Ninja -B /msan/cxx_build/ \
+    -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DLLVM_USE_SANITIZER=MemoryWithOrigins \
+    -DCMAKE_C_COMPILER=clang \
+    -DCMAKE_CXX_COMPILER=clang++ \
+    -DLLVM_TARGETS_TO_BUILD=Native \
+    -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF \
+    -DLIBCXXABI_USE_LLVM_UNWINDER=OFF \
+    -DLIBCXX_HARDENING_MODE=debug \
+    -S /msan/llvm-project/runtimes
+
+  ninja -C /msan/cxx_build/ "-j$( nproc )"  # Use nproc, because MAKEJOBS is the default in docker image builds
+
+  # Clear no longer needed source folder
+  du -sh /msan/llvm-project
+  rm -rf /msan/llvm-project
 fi
 
 if [[ "${RUN_TIDY}" == "true" ]]; then
-  if [ ! -d "${DIR_IWYU}" ]; then
-    mkdir -p "${DIR_IWYU}"/build/
-    git clone --depth=1 https://github.com/include-what-you-use/include-what-you-use -b clang_15 "${DIR_IWYU}"/include-what-you-use
-    cd "${DIR_IWYU}"/build && cmake -G 'Unix Makefiles' -DCMAKE_PREFIX_PATH=/usr/lib/llvm-15 ../include-what-you-use
-    cd "${DIR_IWYU}"/build && make install "$MAKEJOBS"
-  fi
+  ${CI_RETRY_EXE} git clone --depth=1 https://github.com/include-what-you-use/include-what-you-use -b clang_"${TIDY_LLVM_V}" /include-what-you-use
+  cmake -B /iwyu-build/ -G 'Unix Makefiles' -DCMAKE_PREFIX_PATH=/usr/lib/llvm-"${TIDY_LLVM_V}" -S /include-what-you-use
+  make -C /iwyu-build/ install "-j$( nproc )"  # Use nproc, because MAKEJOBS is the default in docker image builds
 fi
 
 mkdir -p "${DEPENDS_DIR}/SDKs" "${DEPENDS_DIR}/sdk-sources"
@@ -67,17 +85,9 @@ if [ -n "$XCODE_VERSION" ] && [ ! -d "${DEPENDS_DIR}/SDKs/${OSX_SDK_BASENAME}" ]
   OSX_SDK_FILENAME="${OSX_SDK_BASENAME}.tar.gz"
   OSX_SDK_PATH="${DEPENDS_DIR}/sdk-sources/${OSX_SDK_FILENAME}"
   if [ ! -f "$OSX_SDK_PATH" ]; then
-    curl --location --fail "${SDK_URL}/${OSX_SDK_FILENAME}" -o "$OSX_SDK_PATH"
+    ${CI_RETRY_EXE} curl --location --fail "${SDK_URL}/${OSX_SDK_FILENAME}" -o "$OSX_SDK_PATH"
   fi
   tar -C "${DEPENDS_DIR}/SDKs" -xf "$OSX_SDK_PATH"
 fi
 
-if [ -n "$ANDROID_HOME" ] && [ ! -d "$ANDROID_HOME" ]; then
-  ANDROID_TOOLS_PATH=${DEPENDS_DIR}/sdk-sources/android-tools.zip
-  if [ ! -f "$ANDROID_TOOLS_PATH" ]; then
-    curl --location --fail "${ANDROID_TOOLS_URL}" -o "$ANDROID_TOOLS_PATH"
-  fi
-  mkdir -p "$ANDROID_HOME"
-  unzip -o "$ANDROID_TOOLS_PATH" -d "$ANDROID_HOME"
-  yes | "${ANDROID_HOME}"/cmdline-tools/bin/sdkmanager --sdk_root="${ANDROID_HOME}" --install "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" "platform-tools" "platforms;android-${ANDROID_API_LEVEL}" "ndk;${ANDROID_NDK_VERSION}"
-fi
+git config --global ${CFG_DONE} "true"

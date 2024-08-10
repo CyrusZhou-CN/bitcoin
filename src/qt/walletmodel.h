@@ -5,12 +5,7 @@
 #ifndef BITCOIN_QT_WALLETMODEL_H
 #define BITCOIN_QT_WALLETMODEL_H
 
-#if defined(HAVE_CONFIG_H)
-#include <config/bitcoin-config.h>
-#endif
-
 #include <key.h>
-#include <script/standard.h>
 
 #include <qt/walletmodeltransaction.h>
 
@@ -135,7 +130,7 @@ public:
     UnlockContext requestUnlock();
 
     bool bumpFee(uint256 hash, uint256& new_hash);
-    bool displayAddress(std::string sAddress) const;
+    void displayAddress(std::string sAddress) const;
 
     static bool isWalletEnabled();
 
@@ -236,7 +231,7 @@ public Q_SLOTS:
     /* New transaction, or transaction changed status */
     void updateTransaction();
     /* New, updated or removed address book entry */
-    void updateAddressBook(const QString &address, const QString &label, bool isMine, const QString &purpose, int status);
+    void updateAddressBook(const QString &address, const QString &label, bool isMine, wallet::AddressPurpose purpose, int status);
     /* Watch-only added */
     void updateWatchOnlyFlag(bool fHaveWatchonly);
     /* Current, immature or unconfirmed balance might have changed - emit 'balanceChanged' if so */

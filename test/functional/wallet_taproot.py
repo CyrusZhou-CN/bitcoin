@@ -378,7 +378,7 @@ class WalletTaprootTest(BitcoinTestFramework):
             assert psbt_online.gettransaction(txid)['confirmations'] > 0
 
         # Cleanup
-        psbt = psbt_online.sendall(recipients=[self.boring.getnewaddress()], options={"psbt": True})["psbt"]
+        psbt = psbt_online.sendall(recipients=[self.boring.getnewaddress()], psbt=True)["psbt"]
         res = psbt_offline.walletprocesspsbt(psbt=psbt, finalize=False)
         rawtx = self.nodes[0].finalizepsbt(res['psbt'])['hex']
         txid = self.nodes[0].sendrawtransaction(rawtx)
@@ -507,4 +507,4 @@ class WalletTaprootTest(BitcoinTestFramework):
         )
 
 if __name__ == '__main__':
-    WalletTaprootTest().main()
+    WalletTaprootTest(__file__).main()
