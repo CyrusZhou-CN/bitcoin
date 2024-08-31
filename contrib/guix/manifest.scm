@@ -1,5 +1,4 @@
 (use-modules (gnu packages)
-             (gnu packages autotools)
              ((gnu packages bash) #:select (bash-minimal))
              (gnu packages bison)
              ((gnu packages certs) #:select (nss-certs))
@@ -91,17 +90,7 @@ chain for " target " development."))
       (home-page (package-home-page xgcc))
       (license (package-license xgcc)))))
 
-(define base-gcc
-  (package
-    (inherit gcc-12) ;; 12.3.0
-    (version "12.4.0")
-    (source (origin
-              (method url-fetch)
-              (uri (string-append "mirror://gnu/gcc/gcc-"
-                                  version "/gcc-" version ".tar.xz"))
-              (sha256
-               (base32
-                "0xcida8l2wykvvzvpcrcn649gj0ijn64gwxbplacpg6c0hk6akvh"))))))
+(define base-gcc gcc-12) ;; 12.4.0
 
 (define base-linux-kernel-headers linux-libre-headers-6.1)
 
@@ -521,9 +510,6 @@ inspecting signatures in Mach-O binaries.")
         gcc-toolchain-12
         cmake-minimal
         gnu-make
-        libtool
-        autoconf-2.71
-        automake
         pkg-config
         ;; Scripting
         python-minimal ;; (3.10)
