@@ -16,7 +16,7 @@ endif()
 #=============================
 # Project / Package metadata
 #=============================
-set(PACKAGE_NAME "Bitcoin Core")
+set(CLIENT_NAME "Bitcoin Core")
 set(CLIENT_VERSION_MAJOR 28)
 set(CLIENT_VERSION_MINOR 99)
 set(CLIENT_VERSION_BUILD 0)
@@ -47,14 +47,14 @@ project(BitcoinCore
   LANGUAGES NONE
 )
 
-set(PACKAGE_VERSION ${PROJECT_VERSION})
+set(CLIENT_VERSION_STRING ${PROJECT_VERSION})
 if(CLIENT_VERSION_RC GREATER 0)
-  string(APPEND PACKAGE_VERSION "rc${CLIENT_VERSION_RC}")
+  string(APPEND CLIENT_VERSION_STRING "rc${CLIENT_VERSION_RC}")
 endif()
 
 set(COPYRIGHT_HOLDERS "The %s developers")
-set(COPYRIGHT_HOLDERS_FINAL "The ${PACKAGE_NAME} developers")
-set(PACKAGE_BUGREPORT "https://github.com/bitcoin/bitcoin/issues")
+set(COPYRIGHT_HOLDERS_FINAL "The ${CLIENT_NAME} developers")
+set(CLIENT_BUGREPORT "https://github.com/bitcoin/bitcoin/issues")
 
 #=============================
 # Language setup
@@ -120,11 +120,6 @@ option(ENABLE_HARDENING "Attempt to harden the resulting executables." ON)
 option(REDUCE_EXPORTS "Attempt to reduce exported symbols in the resulting executables." OFF)
 option(WERROR "Treat compiler warnings as errors." OFF)
 option(WITH_CCACHE "Attempt to use ccache for compiling." ON)
-
-option(WITH_MINIUPNPC "Enable UPnP." OFF)
-if(WITH_MINIUPNPC)
-  find_package(MiniUPnPc MODULE REQUIRED)
-endif()
 
 option(WITH_ZMQ "Enable ZMQ notifications." OFF)
 if(WITH_ZMQ)
@@ -234,17 +229,11 @@ if(BUILD_FOR_FUZZING)
   set(BUILD_WALLET_TOOL OFF)
   set(BUILD_GUI OFF)
   set(ENABLE_EXTERNAL_SIGNER OFF)
-  set(WITH_MINIUPNPC OFF)
   set(WITH_ZMQ OFF)
   set(BUILD_TESTS OFF)
   set(BUILD_GUI_TESTS OFF)
   set(BUILD_BENCH OFF)
   set(BUILD_FUZZ_BINARY ON)
-
-  target_compile_definitions(core_interface INTERFACE
-    ABORT_ON_FAILED_ASSUME
-    FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-  )
 endif()
 
 include(ProcessConfigurations)
@@ -612,7 +601,6 @@ if(ENABLE_WALLET)
   message("   - legacy wallets (Berkeley DB) ..... ${WITH_BDB}")
 endif()
 message("  external signer ..................... ${ENABLE_EXTERNAL_SIGNER}")
-message("  port mapping using UPnP ............. ${WITH_MINIUPNPC}")
 message("  ZeroMQ .............................. ${WITH_ZMQ}")
 message("  USDT tracing ........................ ${WITH_USDT}")
 message("  QR code (GUI) ....................... ${WITH_QRENCODE}")
