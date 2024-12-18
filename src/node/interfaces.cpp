@@ -913,19 +913,17 @@ public:
 
     std::vector<uint256> getCoinbaseMerklePath() override
     {
-        return BlockMerkleBranch(m_block_template->block);
+        return TransactionMerklePath(m_block_template->block, 0);
     }
 
-    bool submitSolution(uint32_t version, uint32_t timestamp, uint32_t nonce, CMutableTransaction coinbase) override
+    bool submitSolution(uint32_t version, uint32_t timestamp, uint32_t nonce, CTransactionRef coinbase) override
     {
         CBlock block{m_block_template->block};
 
-        auto cb = MakeTransactionRef(std::move(coinbase));
-
         if (block.vtx.size() == 0) {
-            block.vtx.push_back(cb);
+            block.vtx.push_back(coinbase);
         } else {
-            block.vtx[0] = cb;
+            block.vtx[0] = coinbase;
         }
 
         block.nVersion = version;
@@ -1004,11 +1002,11 @@ public:
         return TestBlockValidity(state, chainman().GetParams(), chainman().ActiveChainstate(), block, tip, /*fCheckPOW=*/false, check_merkle_root);
     }
 
-    std::unique_ptr<BlockTemplate> createNewBlock(const CScript& script_pub_key, const BlockCreateOptions& options) override
+    std::unique_ptr<BlockTemplate> createNewBlock(const BlockCreateOptions& options) override
     {
         BlockAssembler::Options assemble_options{options};
         ApplyArgsManOptions(*Assert(m_node.args), assemble_options);
-        return std::make_unique<BlockTemplateImpl>(BlockAssembler{chainman().ActiveChainstate(), context()->mempool.get(), assemble_options}.CreateNewBlock(script_pub_key), m_node);
+        return std::make_unique<BlockTemplateImpl>(BlockAssembler{chainman().ActiveChainstate(), context()->mempool.get(), assemble_options}.CreateNewBlock(), m_node);
     }
 
     NodeContext* context() override { return &m_node; }
