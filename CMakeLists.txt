@@ -23,7 +23,7 @@ endif()
 # Project / Package metadata
 #=============================
 set(CLIENT_NAME "Bitcoin Core")
-set(CLIENT_VERSION_MAJOR 28)
+set(CLIENT_VERSION_MAJOR 29)
 set(CLIENT_VERSION_MINOR 99)
 set(CLIENT_VERSION_BUILD 0)
 set(CLIENT_VERSION_RC 0)
@@ -615,9 +615,6 @@ endif()
 add_subdirectory(test)
 add_subdirectory(doc)
 
-include(cmake/crc32c.cmake)
-include(cmake/leveldb.cmake)
-include(cmake/minisketch.cmake)
 add_subdirectory(src)
 
 include(cmake/tests.cmake)
