@@ -32,7 +32,7 @@ def process_mapping(fname):
                 if line.startswith('};'):
                     in_rpcs = False
                 elif '{' in line and '"' in line:
-                    m = re.search(r'{ *("[^"]*"), *([0-9]+) *, *("[^"]*") *},', line)
+                    m = re.search(r'{ *("[^"]*"), *([0-9]+) *, *("[^"]*") *(, \/\*also_string=\*\/true *)?},', line)
                     assert m, 'No match to table expression: %s' % line
                     name = parse_string(m.group(1))
                     idx = int(m.group(2))
@@ -45,7 +45,6 @@ def process_mapping(fname):
 class HelpRpcTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
-        self.supports_cli = False
         self.uses_wallet = None
 
     def run_test(self):
@@ -93,7 +92,8 @@ class HelpRpcTest(BitcoinTestFramework):
         assert_raises_rpc_error(-1, 'help', node.help, 'foo', 'bar')
 
         # invalid argument
-        assert_raises_rpc_error(-3, "JSON value of type number is not of expected type string", node.help, 0)
+        if not self.options.usecli:
+            assert_raises_rpc_error(-3, "JSON value of type number is not of expected type string", node.help, 0)
 
         # help of unknown command
         assert_equal(node.help('foo'), 'help: unknown command: foo')

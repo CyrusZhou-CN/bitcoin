@@ -139,12 +139,18 @@ BOOST_FIXTURE_TEST_CASE(blockmanager_block_data_availability, TestChain100Setup)
 
 BOOST_FIXTURE_TEST_CASE(blockmanager_readblock_hash_mismatch, TestingSetup)
 {
-    CBlockIndex* fake_index{WITH_LOCK(m_node.chainman->GetMutex(), return m_node.chainman->ActiveChain().Tip())};
-    fake_index->phashBlock = &uint256::ONE; // invalid block hash
+    CBlockIndex index;
+    {
+        LOCK(cs_main);
+        const auto tip{m_node.chainman->ActiveTip()};
+        index.nStatus = tip->nStatus;
+        index.nDataPos = tip->nDataPos;
+        index.phashBlock = &uint256::ONE; // mismatched block hash
+    }
 
     ASSERT_DEBUG_LOG("GetHash() doesn't match index");
-    CBlock dummy;
-    BOOST_CHECK(!m_node.chainman->m_blockman.ReadBlock(dummy, *fake_index));
+    CBlock block;
+    BOOST_CHECK(!m_node.chainman->m_blockman.ReadBlock(block, index));
 }
 
 BOOST_AUTO_TEST_CASE(blockmanager_flush_block_file)
@@ -190,12 +196,12 @@ BOOST_AUTO_TEST_CASE(blockmanager_flush_block_file)
     BOOST_CHECK_EQUAL(read_block.nVersion, 0);
     {
         ASSERT_DEBUG_LOG("Errors in block header");
-        BOOST_CHECK(!blockman.ReadBlock(read_block, pos1));
+        BOOST_CHECK(!blockman.ReadBlock(read_block, pos1, {}));
         BOOST_CHECK_EQUAL(read_block.nVersion, 1);
     }
     {
         ASSERT_DEBUG_LOG("Errors in block header");
-        BOOST_CHECK(!blockman.ReadBlock(read_block, pos2));
+        BOOST_CHECK(!blockman.ReadBlock(read_block, pos2, {}));
         BOOST_CHECK_EQUAL(read_block.nVersion, 2);
     }
 
@@ -212,7 +218,7 @@ BOOST_AUTO_TEST_CASE(blockmanager_flush_block_file)
     BOOST_CHECK_EQUAL(blockman.CalculateCurrentUsage(), (TEST_BLOCK_SIZE + STORAGE_HEADER_BYTES) * 2);
 
     // Block 2 was not overwritten:
-    blockman.ReadBlock(read_block, pos2);
+    BOOST_CHECK(!blockman.ReadBlock(read_block, pos2, {}));
     BOOST_CHECK_EQUAL(read_block.nVersion, 2);
 }
 

@@ -144,8 +144,10 @@ class BIP68Test(BitcoinTestFramework):
         # between height/time locking). Small random chance of making the locks
         # all pass.
         for _ in range(400):
+            available_utxos = len(utxos)
+
             # Randomly choose up to 10 inputs
-            num_inputs = random.randint(1, 10)
+            num_inputs = random.randint(1, min(10, available_utxos))
             random.shuffle(utxos)
 
             # Track whether any sequence locks used should fail
@@ -325,7 +327,7 @@ class BIP68Test(BitcoinTestFramework):
         for i in range(2):
             block = create_block(tmpl=tmpl, ntime=cur_time)
             block.solve()
-            tip = block.sha256
+            tip = block.hash_int
             assert_equal(None if i == 1 else 'inconclusive', self.nodes[0].submitblock(block.serialize().hex()))
             tmpl = self.nodes[0].getblocktemplate(NORMAL_GBT_REQUEST_PARAMS)
             tmpl['previousblockhash'] = '%x' % tip
@@ -381,7 +383,7 @@ class BIP68Test(BitcoinTestFramework):
         block.solve()
 
         assert_equal(None, self.nodes[0].submitblock(block.serialize().hex()))
-        assert_equal(self.nodes[0].getbestblockhash(), block.hash)
+        assert_equal(self.nodes[0].getbestblockhash(), block.hash_hex)
 
     def activateCSV(self):
         # activation should happen at block height 432 (3 periods)
