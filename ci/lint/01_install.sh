@@ -8,7 +8,7 @@ export LC_ALL=C
 
 set -o errexit -o pipefail -o xtrace
 
-export CI_RETRY_EXE="/ci_retry --"
+export CI_RETRY_EXE="/ci_retry"
 
 pushd "/"
 
@@ -40,7 +40,6 @@ command -v python3
 python3 --version
 
 ${CI_RETRY_EXE} pip3 install \
-  codespell==2.4.1 \
   lief==0.16.6 \
   mypy==1.18.2 \
   pyzmq==27.1.0 \

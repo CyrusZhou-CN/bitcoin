@@ -1,5 +1,5 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
-// Copyright (c) 2009-2022 The Bitcoin Core developers
+// Copyright (c) 2009-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -38,14 +38,6 @@ static constexpr int64_t TIMESTAMP_WINDOW = MAX_FUTURE_BLOCK_TIME;
 //! Init values for CBlockIndex nSequenceId when loaded from disk
 static constexpr int32_t SEQ_ID_BEST_CHAIN_FROM_DISK = 0;
 static constexpr int32_t SEQ_ID_INIT_FROM_DISK = 1;
-
-/**
- * Maximum gap between node time and block time used
- * for the "Catching up..." mode in GUI.
- *
- * Ref: https://github.com/bitcoin/bitcoin/pull/1026
- */
-static constexpr int64_t MAX_BLOCK_TIME_GAP = 90 * 60;
 
 enum BlockStatus : uint32_t {
     //! Unused.
@@ -307,7 +299,15 @@ protected:
     CBlockIndex& operator=(CBlockIndex&&) = delete;
 };
 
-arith_uint256 GetBlockProof(const CBlockIndex& block);
+/** Compute how much work an nBits value corresponds to. */
+arith_uint256 GetBitsProof(uint32_t bits);
+
+/** Compute how much work a block index entry corresponds to. */
+inline arith_uint256 GetBlockProof(const CBlockIndex& block) { return GetBitsProof(block.nBits); }
+
+/** Compute how much work a block header corresponds to. */
+inline arith_uint256 GetBlockProof(const CBlockHeader& header) { return GetBitsProof(header.nBits); }
+
 /** Return the time it would take to redo the work difference between from and to, assuming the current hashrate corresponds to the difficulty at tip, in seconds. */
 int64_t GetBlockProofEquivalentTime(const CBlockIndex& to, const CBlockIndex& from, const CBlockIndex& tip, const Consensus::Params&);
 /** Find the forking point between two chain tips. */
@@ -426,6 +426,15 @@ public:
     int Height() const
     {
         return int(vChain.size()) - 1;
+    }
+
+    /** Check whether this chain's tip exists, has enough work, and is recent. */
+    bool IsTipRecent(const arith_uint256& min_chain_work, std::chrono::seconds max_tip_age) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+    {
+        const auto tip{Tip()};
+        return tip &&
+               tip->nChainWork >= min_chain_work &&
+               tip->Time() >= Now<NodeSeconds>() - max_tip_age;
     }
 
     /** Set/initialize a chain with a given tip. */

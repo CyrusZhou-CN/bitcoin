@@ -1,7 +1,8 @@
-// Copyright (c) 2012-2022 The Bitcoin Core developers
+// Copyright (c) 2012-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <compat/compat.h>
 #include <net_permissions.h>
 #include <netaddress.h>
 #include <netbase.h>
@@ -348,17 +349,20 @@ BOOST_AUTO_TEST_CASE(netbase_parsenetwork)
     BOOST_CHECK_EQUAL(ParseNetwork("ipv4"), NET_IPV4);
     BOOST_CHECK_EQUAL(ParseNetwork("ipv6"), NET_IPV6);
     BOOST_CHECK_EQUAL(ParseNetwork("onion"), NET_ONION);
-    BOOST_CHECK_EQUAL(ParseNetwork("tor"), NET_ONION);
     BOOST_CHECK_EQUAL(ParseNetwork("cjdns"), NET_CJDNS);
 
     BOOST_CHECK_EQUAL(ParseNetwork("IPv4"), NET_IPV4);
     BOOST_CHECK_EQUAL(ParseNetwork("IPv6"), NET_IPV6);
     BOOST_CHECK_EQUAL(ParseNetwork("ONION"), NET_ONION);
-    BOOST_CHECK_EQUAL(ParseNetwork("TOR"), NET_ONION);
     BOOST_CHECK_EQUAL(ParseNetwork("CJDNS"), NET_CJDNS);
 
+    // "tor" as a network specification was deprecated in 60dc8e4208 in favor of
+    // "onion" and later removed.
+    BOOST_CHECK_EQUAL(ParseNetwork("tor"), NET_UNROUTABLE);
+    BOOST_CHECK_EQUAL(ParseNetwork("TOR"), NET_UNROUTABLE);
+
     BOOST_CHECK_EQUAL(ParseNetwork(":)"), NET_UNROUTABLE);
-    BOOST_CHECK_EQUAL(ParseNetwork("tÖr"), NET_UNROUTABLE);
+    BOOST_CHECK_EQUAL(ParseNetwork("oniÖn"), NET_UNROUTABLE);
     BOOST_CHECK_EQUAL(ParseNetwork("\xfe\xff"), NET_UNROUTABLE);
     BOOST_CHECK_EQUAL(ParseNetwork(""), NET_UNROUTABLE);
 }
@@ -499,17 +503,17 @@ BOOST_AUTO_TEST_CASE(netbase_dont_resolve_strings_with_embedded_nul_characters)
 
 static const std::vector<CAddress> fixture_addresses({
     CAddress{
-        CService(CNetAddr(in6_addr(IN6ADDR_LOOPBACK_INIT)), 0 /* port */),
+        CService(CNetAddr(in6_addr(COMPAT_IN6ADDR_LOOPBACK_INIT)), 0 /* port */),
         NODE_NONE,
         NodeSeconds{0x4966bc61s}, /* Fri Jan  9 02:54:25 UTC 2009 */
     },
     CAddress{
-        CService(CNetAddr(in6_addr(IN6ADDR_LOOPBACK_INIT)), 0x00f1 /* port */),
+        CService(CNetAddr(in6_addr(COMPAT_IN6ADDR_LOOPBACK_INIT)), 0x00f1 /* port */),
         NODE_NETWORK,
         NodeSeconds{0x83766279s}, /* Tue Nov 22 11:22:33 UTC 2039 */
     },
     CAddress{
-        CService(CNetAddr(in6_addr(IN6ADDR_LOOPBACK_INIT)), 0xf1f2 /* port */),
+        CService(CNetAddr(in6_addr(COMPAT_IN6ADDR_LOOPBACK_INIT)), 0xf1f2 /* port */),
         static_cast<ServiceFlags>(NODE_WITNESS | NODE_COMPACT_FILTERS | NODE_NETWORK_LIMITED),
         NodeSeconds{0xffffffffs}, /* Sun Feb  7 06:28:15 UTC 2106 */
     },

@@ -37,7 +37,7 @@ You can then either point to the SDK using the `SDK_PATH` environment variable:
 
 ```sh
 # Extract the SDK tarball to /path/to/parent/dir/of/extracted/SDK/Xcode-<foo>-<bar>-extracted-SDK-with-libcxx-headers
-tar -C /path/to/parent/dir/of/extracted/SDK -xaf /path/to/Xcode-<foo>-<bar>-extracted-SDK-with-libcxx-headers.tar.gz
+tar -C /path/to/parent/dir/of/extracted/SDK -xaf /path/to/Xcode-<foo>-<bar>-extracted-SDK-with-libcxx-headers.tar
 
 # Indicate where to locate the SDK tarball
 export SDK_PATH=/path/to/parent/dir/of/extracted/SDK
@@ -103,6 +103,18 @@ worktree to save disk space:
 ./contrib/guix/guix-clean
 ```
 
+## Gathering shasums of build outputs
+
+After a successful build, the shasums of the build outputs are gathered
+into files named `SHA256SUMS`. These files are located in each of the
+architecture-specific output directories.
+
+To gather all shasums and output them together to console, for e.g.
+inclusion in a Guix pull request comment, run:
+
+``` sh
+source contrib/shell/git-utils.bash && uname -m && find guix-build-$(git_head_version)/output/ -type f -print0 | env LC_ALL=C sort -z | xargs -r0 sha256sum
+```
 
 ## Attesting to build outputs
 
