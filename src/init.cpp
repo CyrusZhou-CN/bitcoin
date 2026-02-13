@@ -96,6 +96,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -684,7 +685,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
 
 
     argsman.AddArg("-blockmaxweight=<n>", strprintf("Set maximum BIP141 block weight (default: %d)", DEFAULT_BLOCK_MAX_WEIGHT), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::BLOCK_CREATION);
-    argsman.AddArg("-blockreservedweight=<n>", strprintf("Reserve space for the fixed-size block header plus the largest coinbase transaction the mining software may add to the block. (default: %d).", DEFAULT_BLOCK_RESERVED_WEIGHT), ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
+    argsman.AddArg("-blockreservedweight=<n>", strprintf("Reserve space for the fixed-size block header plus the largest coinbase transaction the mining software may add to the block. Only affects mining RPC clients, not IPC clients. (default: %d).", DEFAULT_BLOCK_RESERVED_WEIGHT), ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     argsman.AddArg("-blockmintxfee=<amt>", strprintf("Set lowest fee rate (in %s/kvB) for transactions to be included in block creation. (default: %s)", CURRENCY_UNIT, FormatMoney(DEFAULT_BLOCK_MIN_TX_FEE)), ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     argsman.AddArg("-blockversion=<n>", "Override block version to test forking scenarios", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::BLOCK_CREATION);
 
@@ -1559,9 +1560,9 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     ApplyArgsManOptions(args, peerman_opts);
 
     {
-
-        // Read asmap file if configured
-        std::vector<bool> asmap;
+        // Read asmap file if configured and initialize
+        // Netgroupman with or without it
+        assert(!node.netgroupman);
         if (args.IsArgSet("-asmap") && !args.IsArgNegated("-asmap")) {
             fs::path asmap_path = args.GetPathArg("-asmap");
             if (asmap_path.empty()) {
@@ -1575,20 +1576,18 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
                 InitError(strprintf(_("Could not find asmap file %s"), fs::quoted(fs::PathToString(asmap_path))));
                 return false;
             }
-            asmap = DecodeAsmap(asmap_path);
+            std::vector<std::byte> asmap{DecodeAsmap(asmap_path)};
             if (asmap.size() == 0) {
                 InitError(strprintf(_("Could not parse asmap file %s"), fs::quoted(fs::PathToString(asmap_path))));
                 return false;
             }
-            const uint256 asmap_version = (HashWriter{} << asmap).GetHash();
+            const uint256 asmap_version = AsmapVersion(asmap);
+            node.netgroupman = std::make_unique<NetGroupManager>(NetGroupManager::WithLoadedAsmap(std::move(asmap)));
             LogInfo("Using asmap version %s for IP bucketing", asmap_version.ToString());
         } else {
+            node.netgroupman = std::make_unique<NetGroupManager>(NetGroupManager::NoAsmap());
             LogInfo("Using /16 prefix for IP bucketing");
         }
-
-        // Initialize netgroup manager
-        assert(!node.netgroupman);
-        node.netgroupman = std::make_unique<NetGroupManager>(std::move(asmap));
 
         // Initialize addrman
         assert(!node.addrman);
