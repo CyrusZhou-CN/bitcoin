@@ -69,10 +69,15 @@ set(CLIENT_BUGREPORT "https://github.com/bitcoin/bitcoin/issues")
 #=============================
 # Language setup
 #=============================
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_HOST_APPLE)
+if(CMAKE_VERSION VERSION_LESS 4.2 AND CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_HOST_APPLE)
   # We do not use the install_name_tool when cross-compiling for macOS.
+  # However, CMake < 4.2 still searches for Apple's version of the tool,
+  # which causes an error during configuration.
+  # See:
+  # - https://gitlab.kitware.com/cmake/cmake/-/issues/27069
+  # - https://gitlab.kitware.com/cmake/cmake/-/merge_requests/10955
   # So disable this tool check in further enable_language() commands.
-  set(CMAKE_PLATFORM_HAS_INSTALLNAME FALSE)
+  set(CMAKE_INSTALL_NAME_TOOL "${CMAKE_COMMAND} -E true")
 endif()
 enable_language(CXX)
 set(CMAKE_CXX_STANDARD 20)
@@ -119,12 +124,15 @@ endif()
 cmake_dependent_option(BUILD_WALLET_TOOL "Build bitcoin-wallet tool." ${BUILD_TESTS} "ENABLE_WALLET" OFF)
 
 option(REDUCE_EXPORTS "Attempt to reduce exported symbols in the resulting executables." OFF)
+option(CMAKE_COMPILE_WARNING_AS_ERROR "Treat compiler warnings as errors." OFF)
 option(WITH_CCACHE "Attempt to use ccache for compiling." ON)
 
 option(WITH_ZMQ "Enable ZMQ notifications." OFF)
 if(WITH_ZMQ)
   find_package(ZeroMQ 4.0.0 MODULE REQUIRED)
 endif()
+
+option(WITH_EMBEDDED_ASMAP "Embed default ASMap data." ON)
 
 option(WITH_USDT "Enable tracepoints for Userspace, Statically Defined Tracing." OFF)
 if(WITH_USDT)
@@ -215,6 +223,7 @@ if(BUILD_FOR_FUZZING)
   set(BUILD_GUI OFF)
   set(ENABLE_EXTERNAL_SIGNER OFF)
   set(WITH_ZMQ OFF)
+  set(WITH_EMBEDDED_ASMAP OFF)
   set(BUILD_TESTS OFF)
   set(BUILD_GUI_TESTS OFF)
   set(BUILD_BENCH OFF)
@@ -653,6 +662,7 @@ else()
   set(ipc_status OFF)
 endif()
 message("  IPC ................................. ${ipc_status}")
+message("  Embedded ASMap ...................... ${WITH_EMBEDDED_ASMAP}")
 message("  USDT tracing ........................ ${WITH_USDT}")
 message("  QR code (GUI) ....................... ${WITH_QRENCODE}")
 message("  DBus (GUI) .......................... ${WITH_DBUS}")
