@@ -27,7 +27,7 @@ get_directory_property(precious_variables CACHE_VARIABLES)
 # Project / Package metadata
 #=============================
 set(CLIENT_NAME "Bitcoin Core")
-set(CLIENT_VERSION_MAJOR 30)
+set(CLIENT_VERSION_MAJOR 31)
 set(CLIENT_VERSION_MINOR 99)
 set(CLIENT_VERSION_BUILD 0)
 set(CLIENT_VERSION_RC 0)
@@ -117,8 +117,12 @@ if(ENABLE_WALLET)
   if(VCPKG_TARGET_TRIPLET)
     # Use of the `unofficial::` namespace is a vcpkg package manager convention.
     find_package(unofficial-sqlite3 CONFIG REQUIRED)
+    add_library(SQLite3::SQLite3 ALIAS unofficial::sqlite3::sqlite3)
   else()
     find_package(SQLite3 3.7.17 REQUIRED)
+    if(NOT TARGET SQLite3::SQLite3) # CMake < 4.3
+      add_library(SQLite3::SQLite3 ALIAS SQLite::SQLite3)
+    endif()
   endif()
 endif()
 cmake_dependent_option(BUILD_WALLET_TOOL "Build bitcoin-wallet tool." ${BUILD_TESTS} "ENABLE_WALLET" OFF)
@@ -449,6 +453,7 @@ else()
   try_append_cxx_flags("-Wall" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wextra" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wgnu" TARGET warn_interface SKIP_LINK)
+  try_append_cxx_flags("-Wcovered-switch-default" TARGET warn_interface SKIP_LINK)
   # Some compilers will ignore -Wformat-security without -Wformat, so just combine the two here.
   try_append_cxx_flags("-Wformat -Wformat-security" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wvla" TARGET warn_interface SKIP_LINK)
@@ -690,6 +695,7 @@ if(configure_warnings)
       message(WARNING "${warning}")
     endforeach()
     message("  ******\n")
+    message(AUTHOR_WARNING "Warnings have been encountered!")
 endif()
 
 # We want all build properties to be encapsulated properly.

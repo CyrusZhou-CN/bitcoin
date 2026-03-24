@@ -542,6 +542,13 @@ to a function that accepts a `std::string` parameter. An implicit conversion occ
 Use `IWYU pragma: export` very sparingly, as this enforces transitive inclusion of headers
 and undermines the specific purpose of IWYU.
 
+The acceptable cases for using `IWYU pragma: export` are:
+1. Facade headers. For example, see [`compat/compat.h`](/src/compat/compat.h).
+2. Drop-in replacement headers. For example, see [`util/time.h`](/src/util/time.h).
+3. Presenting a complete interface across multiple headers.
+
+A comment explaining the rationale is required for every use of `IWYU pragma: export`.
+
 ### Performance profiling with perf
 
 Profiling is a good way to get a precise idea of where time is being spent in
@@ -672,7 +679,7 @@ and its `cs_KeyStore` lock for example).
 - [ThreadHTTP (`b-http`)](https://doxygen.bitcoincore.org/httpserver_8cpp.html#abb9f6ea8819672bd9a62d3695070709c)
   : Libevent thread to listen for RPC and REST connections.
 
-- [HTTP worker threads(`b-httpworker.x`)](https://doxygen.bitcoincore.org/httpserver_8cpp.html#aa6a7bc27265043bc0193220c5ae3a55f)
+- [HTTP worker threads (`b-http_pool_x`)](https://doxygen.bitcoincore.org/httpserver_8cpp.html#a2ad0a49dc9b5e8117c0dee98c24187d8)
   : Threads to service RPC and REST requests.
 
 - [Indexer threads (`b-txindex`, etc)](https://doxygen.bitcoincore.org/class_base_index.html#a96a7407421fbf877509248bbe64f8d87)
@@ -854,19 +861,19 @@ Foo(vec);
 enum class Tabs {
     info,
     console,
-    network_graph,
-    peers
 };
 
 int GetInt(Tabs tab)
 {
-    switch (tab) {
-    case Tabs::info: return 0;
-    case Tabs::console: return 1;
-    case Tabs::network_graph: return 2;
-    case Tabs::peers: return 3;
-    } // no default case, so the compiler can warn about missing cases
-    assert(false);
+    int ret = [&]() {
+        switch (tab) {
+        case Tabs::info: return 0;
+        case Tabs::console: return 1;
+        } // no default case, so the compiler can warn about missing cases
+        assert(false);
+    }();
+    LogInfo("Tab %s", ret);
+    return ret;
 }
 ```
 
