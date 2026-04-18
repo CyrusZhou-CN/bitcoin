@@ -209,7 +209,7 @@ fi
 
 if [[ "${RUN_IWYU}" == true ]]; then
   # TODO: Consider enforcing IWYU across the entire codebase.
-  FILES_WITH_ENFORCED_IWYU="/src/((crypto|index|kernel|primitives|univalue/(lib|test)|zmq)/.*\\.cpp|node/blockstorage\\.cpp|node/utxo_snapshot\\.cpp|core_io\\.cpp|signet\\.cpp)"
+  FILES_WITH_ENFORCED_IWYU="/src/(((crypto|index|kernel|primitives|univalue/(lib|test)|util|zmq)/.*|common/license_info|node/blockstorage|node/utxo_snapshot|clientversion|core_io|signet)\\.cpp)"
   jq --arg patterns "$FILES_WITH_ENFORCED_IWYU" 'map(select(.file | test($patterns)))' "${BASE_BUILD_DIR}/compile_commands.json" > "${BASE_BUILD_DIR}/compile_commands_iwyu_errors.json"
   jq --arg patterns "$FILES_WITH_ENFORCED_IWYU" 'map(select(.file | test($patterns) | not))' "${BASE_BUILD_DIR}/compile_commands.json" > "${BASE_BUILD_DIR}/compile_commands_iwyu_warnings.json"
 
@@ -224,7 +224,7 @@ if [[ "${RUN_IWYU}" == true ]]; then
              -Xiwyu --check_also="*/primitives/*.h" \
              2>&1 | tee /tmp/iwyu_ci.out
     python3 "/include-what-you-use/fix_includes.py" --nosafe_headers < /tmp/iwyu_ci.out
-    git diff -U1 | ./contrib/devtools/clang-format-diff.py -binary="clang-format-${TIDY_LLVM_V}" -p1 -i -v
+    git diff -U1 | ./contrib/devtools/clang-format-diff.py -binary="clang-format-${IWYU_LLVM_V}" -p1 -i -v
   }
 
   run_iwyu "compile_commands_iwyu_errors.json"

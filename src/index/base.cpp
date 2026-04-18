@@ -33,6 +33,7 @@
 #include <cassert>
 #include <compare>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -154,9 +155,13 @@ static const CBlockIndex* NextSyncBlock(const CBlockIndex* pindex_prev, CChain& 
         return chain.Genesis();
     }
 
-    const CBlockIndex* pindex = chain.Next(pindex_prev);
-    if (pindex) {
+    if (const auto* pindex{chain.Next(pindex_prev)}) {
         return pindex;
+    }
+
+    // If there is no next block, we might be synced
+    if (pindex_prev == chain.Tip()) {
+        return nullptr;
     }
 
     // Since block is not in the chain, return the next block in the chain AFTER the last common ancestor.

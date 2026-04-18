@@ -1866,7 +1866,8 @@ std::vector<CTransactionRef> PeerManagerImpl::AbortPrivateBroadcast(const uint25
     std::vector<CTransactionRef> removed_txs;
 
     size_t connections_cancelled{0};
-    for (const auto& [tx, _] : snapshot) {
+    for (const auto& tx_info : snapshot) {
+        const CTransactionRef& tx{tx_info.tx};
         if (tx->GetHash().ToUint256() != id && tx->GetWitnessHash().ToUint256() != id) continue;
         if (const auto peer_acks{m_tx_for_private_broadcast.Remove(tx)}) {
             removed_txs.push_back(tx);
@@ -3599,7 +3600,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         }
         vRecv.ignore(8); // Ignore the addrMe service bits sent by the peer
         vRecv >> CNetAddr::V1(addrMe);
-        if (!pfrom.IsInboundConn())
+        if (!pfrom.IsInboundConn() && !pfrom.IsPrivateBroadcastConn())
         {
             // Overwrites potentially existing services. In contrast to this,
             // unvalidated services received via gossip relay in ADDR/ADDRV2

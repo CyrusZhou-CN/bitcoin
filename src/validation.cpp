@@ -437,7 +437,7 @@ class MemPoolAccept
 public:
     explicit MemPoolAccept(CTxMemPool& mempool, Chainstate& active_chainstate) :
         m_pool(mempool),
-        m_view(&m_dummy),
+        m_view(&CoinsViewEmpty::Get()),
         m_viewmempool(&active_chainstate.CoinsTip(), m_pool),
         m_active_chainstate(active_chainstate)
     {
@@ -737,10 +737,6 @@ private:
     /** When m_view is connected to m_viewmempool as its backend, it can pull coins from the mempool and from the UTXO
      * set. This is also where temporary coins are stored. */
     CCoinsViewMemPool m_viewmempool;
-    /** When m_view is connected to m_dummy, it can no longer look up coins from the mempool or UTXO set (meaning no disk
-     * operations happen), but can still return coins it accessed previously. Useful for keeping track of which coins
-     * were pulled from disk. */
-    CCoinsView m_dummy;
 
     Chainstate& m_active_chainstate;
 
@@ -867,14 +863,14 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         }
     }
 
-    // This is const, but calls into the back end CoinsViews. The CCoinsViewDB at the bottom of the
-    // hierarchy brings the best block into scope. See CCoinsViewDB::GetBestBlock().
-    m_view.GetBestBlock();
+    // This is const, but calls into `CCoinsViewCache::GetBestBlock()` to refresh
+    // the cached best block through `m_viewmempool` after caching inputs.
+    (void)m_view.GetBestBlock();
 
-    // we have all inputs cached now, so switch back to dummy (to protect
-    // against bugs where we pull more inputs from disk that miss being added
-    // to coins_to_uncache)
-    m_view.SetBackend(m_dummy);
+    // All required inputs are cached now, so switch m_view to the empty backend.
+    // This keeps already-fetched cache entries for later checks and prevents new
+    // backend lookups (which would avoid coins_to_uncache tracking).
+    m_view.SetBackend(CoinsViewEmpty::Get());
 
     assert(m_active_chainstate.m_blockman.LookupBlockIndex(m_view.GetBestBlock()) == m_active_chainstate.m_chain.Tip());
 
@@ -2861,7 +2857,8 @@ static void UpdateTipLog(
     const CBlockIndex* tip,
     const std::string& func_name,
     const std::string& prefix,
-    const std::string& warning_messages) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+    const std::string& warning_messages,
+    const bool background_validation) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
 
     AssertLockHeld(::cs_main);
@@ -2872,7 +2869,7 @@ static void UpdateTipLog(
                    tip->GetBlockHash().ToString(), tip->nHeight, tip->nVersion,
                    log(tip->nChainWork.getdouble()) / log(2.0), tip->m_chain_tx_count,
                    FormatISO8601DateTime(tip->GetBlockTime()),
-                   chainman.GuessVerificationProgress(tip),
+                   background_validation ? chainman.GetBackgroundVerificationProgress(*tip) : chainman.GuessVerificationProgress(tip),
                    coins_tip.DynamicMemoryUsage() * (1.0 / (1 << 20)),
                    coins_tip.GetCacheSize(),
                    !warning_messages.empty() ? strprintf(" warning='%s'", warning_messages) : "");
@@ -2889,7 +2886,7 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
         // Only log every so often so that we don't bury log messages at the tip.
         constexpr int BACKGROUND_LOG_INTERVAL = 2000;
         if (pindexNew->nHeight % BACKGROUND_LOG_INTERVAL == 0) {
-            UpdateTipLog(m_chainman, coins_tip, pindexNew, __func__, "[background validation] ", "");
+            UpdateTipLog(m_chainman, coins_tip, pindexNew, __func__, "[background validation] ", "", /*background_validation=*/true);
         }
         return;
     }
@@ -2912,7 +2909,7 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
         }
     }
     UpdateTipLog(m_chainman, coins_tip, pindexNew, __func__, "",
-                 util::Join(warning_messages, Untranslated(", ")).original);
+                 util::Join(warning_messages, Untranslated(", ")).original, /*background_validation=*/false);
 }
 
 /** Disconnect m_chain's tip.
@@ -3126,9 +3123,8 @@ CBlockIndex* Chainstate::FindMostWorkChain()
 
         // Check whether all blocks on the path between the currently active chain and the candidate are valid.
         // Just going until the active chain is an optimization, as we know all blocks in it are valid already.
-        CBlockIndex *pindexTest = pindexNew;
         bool fInvalidAncestor = false;
-        while (pindexTest && !m_chain.Contains(pindexTest)) {
+        for (CBlockIndex *pindexTest = pindexNew; pindexTest && !m_chain.Contains(pindexTest); pindexTest = pindexTest->pprev) {
             assert(pindexTest->HaveNumChainTxs() || pindexTest->nHeight == 0);
 
             // Pruned nodes may have entries in setBlockIndexCandidates for
@@ -3142,27 +3138,21 @@ CBlockIndex* Chainstate::FindMostWorkChain()
                 if (fFailedChain && (m_chainman.m_best_invalid == nullptr || pindexNew->nChainWork > m_chainman.m_best_invalid->nChainWork)) {
                     m_chainman.m_best_invalid = pindexNew;
                 }
-                CBlockIndex *pindexFailed = pindexNew;
                 // Remove the entire chain from the set.
-                while (pindexTest != pindexFailed) {
-                    if (fFailedChain) {
-                        pindexFailed->nStatus |= BLOCK_FAILED_VALID;
-                        m_blockman.m_dirty_blockindex.insert(pindexFailed);
-                    } else if (fMissingData) {
-                        // If we're missing data, then add back to m_blocks_unlinked,
-                        // so that if the block arrives in the future we can try adding
-                        // to setBlockIndexCandidates again.
+                for (CBlockIndex *pindexFailed = pindexNew; pindexFailed != pindexTest; pindexFailed = pindexFailed->pprev) {
+                    if (fMissingData && !fFailedChain) {
+                        // If we're missing data and not a descendant of an invalid block,
+                        // then add back to m_blocks_unlinked, so that if the block arrives in the future
+                        // we can try adding to setBlockIndexCandidates again.
                         m_blockman.m_blocks_unlinked.insert(
                             std::make_pair(pindexFailed->pprev, pindexFailed));
                     }
                     setBlockIndexCandidates.erase(pindexFailed);
-                    pindexFailed = pindexFailed->pprev;
                 }
                 setBlockIndexCandidates.erase(pindexTest);
                 fInvalidAncestor = true;
                 break;
             }
-            pindexTest = pindexTest->pprev;
         }
         if (!fInvalidAncestor)
             return pindexNew;
@@ -4076,7 +4066,7 @@ arith_uint256 CalculateClaimedHeadersWork(std::span<const CBlockHeader> headers)
  *  v0.12 and v0.15 (when no additional protection was in place) whereby an attacker could unboundedly
  *  grow our in-memory block index. See https://bitcoincore.org/en/2024/07/03/disclose-header-spam.
  */
-static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidationState& state, BlockManager& blockman, const ChainstateManager& chainman, const CBlockIndex* pindexPrev) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidationState& state, const ChainstateManager& chainman, const CBlockIndex* pindexPrev) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     AssertLockHeld(::cs_main);
     assert(pindexPrev != nullptr);
@@ -4220,7 +4210,7 @@ bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValida
             LogDebug(BCLog::VALIDATION, "header %s has prev block invalid: %s\n", hash.ToString(), block.hashPrevBlock.ToString());
             return state.Invalid(BlockValidationResult::BLOCK_INVALID_PREV, "bad-prevblk");
         }
-        if (!ContextualCheckBlockHeader(block, state, m_blockman, *this, pindexPrev)) {
+        if (!ContextualCheckBlockHeader(block, state, *this, pindexPrev)) {
             LogDebug(BCLog::VALIDATION, "%s: Consensus::ContextualCheckBlockHeader: %s, %s\n", __func__, hash.ToString(), state.ToString());
             return false;
         }
@@ -4501,7 +4491,7 @@ BlockValidationState TestBlockValidity(
      * - do run ContextualCheckBlock()
      */
 
-    if (!ContextualCheckBlockHeader(block, state, chainstate.m_blockman, chainstate.m_chainman, tip)) {
+    if (!ContextualCheckBlockHeader(block, state, chainstate.m_chainman, tip)) {
         if (state.IsValid()) NONFATAL_UNREACHABLE();
         return state;
     }
@@ -4888,7 +4878,7 @@ void Chainstate::PopulateBlockIndexCandidates()
         // With assumeutxo, the snapshot block is a candidate for the tip, but it
         // may not have BLOCK_VALID_TRANSACTIONS (e.g. if we haven't yet downloaded
         // the block), so we special-case it here.
-        if (pindex == SnapshotBase() || pindex == TargetBlock() ||
+        if (pindex == SnapshotBase() ||
                 (pindex->IsValid(BLOCK_VALID_TRANSACTIONS) &&
                  (pindex->HaveNumChainTxs() || pindex->pprev == nullptr))) {
             TryAddBlockIndexCandidate(pindex);
@@ -5521,6 +5511,19 @@ double ChainstateManager::GuessVerificationProgress(const CBlockIndex* pindex) c
     }
 
     return std::min<double>(pindex->m_chain_tx_count / fTxTotal, 1.0);
+}
+
+double ChainstateManager::GetBackgroundVerificationProgress(const CBlockIndex& pindex) const
+{
+    AssertLockHeld(GetMutex());
+    Assert(HistoricalChainstate());
+    auto target_block = HistoricalChainstate()->TargetBlock();
+
+    if (pindex.m_chain_tx_count == 0 || target_block->m_chain_tx_count == 0) {
+        LogDebug(BCLog::VALIDATION, "[background validation] Block %d has unset m_chain_tx_count. Unable to estimate verification progress.", pindex.nHeight);
+        return 0.0;
+    }
+    return static_cast<double>(pindex.m_chain_tx_count) / static_cast<double>(target_block->m_chain_tx_count);
 }
 
 Chainstate& ChainstateManager::InitializeChainstate(CTxMemPool* mempool)

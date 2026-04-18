@@ -12,6 +12,7 @@
 #include <addrman.h>
 #include <banman.h>
 #include <blockfilter.h>
+#include <btcsignals.h>
 #include <chain.h>
 #include <chainparams.h>
 #include <chainparamsbase.h>
@@ -111,8 +112,6 @@
 #include <csignal>
 #include <sys/stat.h>
 #endif
-
-#include <boost/signals2/signal.hpp>
 
 #ifdef ENABLE_ZMQ
 #include <zmq/zmqabstractnotifier.h>
@@ -276,7 +275,9 @@ void Interrupt(NodeContext& node)
     InterruptHTTPRPC();
     InterruptRPC();
     InterruptREST();
-    InterruptTorControl();
+    if (node.tor_controller) {
+        node.tor_controller->Interrupt();
+    }
     InterruptMapPort();
     if (node.connman)
         node.connman->Interrupt();
@@ -319,7 +320,10 @@ void Shutdown(NodeContext& node)
     if (node.peerman && node.validation_signals) node.validation_signals->UnregisterValidationInterface(node.peerman.get());
     if (node.connman) node.connman->Stop();
 
-    StopTorControl();
+    if (node.tor_controller) {
+        node.tor_controller->Join();
+        node.tor_controller.reset();
+    }
 
     if (node.background_init_thread.joinable()) node.background_init_thread.join();
     // After everything has been shut down, but before things get flushed, stop the
@@ -506,7 +510,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-dbcache=<n>", strprintf("Maximum database cache size <n> MiB (minimum %d, default: %d). Make sure you have enough RAM. In addition, unused memory allocated to the mempool is shared with this cache (see -maxmempool).", MIN_DB_CACHE >> 20, node::GetDefaultDBCache() >> 20), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-includeconf=<file>", "Specify additional configuration file, relative to the -datadir path (only useable from configuration file, not command line)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-allowignoredconf", strprintf("For backwards compatibility, treat an unused %s file in the datadir as a warning, not an error.", BITCOIN_CONF_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-loadblock=<file>", "Imports blocks from external file on startup", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-loadblock=<file>", "Imports blocks from an external file on startup. Obfuscated blocks are not supported.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-maxmempool=<n>", strprintf("Keep the transaction memory pool below <n> megabytes (default: %u)", DEFAULT_MAX_MEMPOOL_SIZE_MB), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-mempoolexpiry=<n>", strprintf("Do not keep transactions in the mempool longer than <n> hours (default: %u)", DEFAULT_MEMPOOL_EXPIRY_HOURS), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-minimumchainwork=<hex>", strprintf("Minimum work assumed to exist on a valid chain in hex (default: %s, testnet3: %s, testnet4: %s, signet: %s)", defaultChainParams->GetConsensus().nMinimumChainWork.GetHex(), testnetChainParams->GetConsensus().nMinimumChainWork.GetHex(), testnet4ChainParams->GetConsensus().nMinimumChainWork.GetHex(), signetChainParams->GetConsensus().nMinimumChainWork.GetHex()), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::OPTIONS);
@@ -719,7 +723,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-rpcworkqueue=<n>", strprintf("Set the maximum depth of the work queue to service RPC calls (default: %d)", DEFAULT_HTTP_WORKQUEUE), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::RPC);
     argsman.AddArg("-server", "Accept command line and JSON-RPC commands", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     if (can_listen_ipc) {
-        argsman.AddArg("-ipcbind=<address>", "Bind to Unix socket address and listen for incoming connections. Valid address values are \"unix\" to listen on the default path, <datadir>/node.sock, or \"unix:/custom/path\" to specify a custom path. Can be specified multiple times to listen on multiple paths. Default behavior is not to listen on any path. If relative paths are specified, they are interpreted relative to the network data directory. If paths include any parent directory components and the parent directories do not exist, they will be created.", ArgsManager::ALLOW_ANY, OptionsCategory::IPC);
+        argsman.AddArg("-ipcbind=<address>", "Bind to Unix socket address and listen for incoming connections. Valid address values are \"unix\" to listen on the default path, <datadir>/node.sock, or \"unix:/custom/path\" to specify a custom path. Can be specified multiple times to listen on multiple paths. Default behavior is not to listen on any path. If relative paths are specified, they are interpreted relative to the network data directory. If paths include any parent directory components and the parent directories do not exist, they will be created. Enabling this gives local processes that can access the socket unauthenticated RPC access, so it's important to choose a path with secure permissions if customizing this.", ArgsManager::ALLOW_ANY, OptionsCategory::IPC);
     }
 
 #if HAVE_DECL_FORK
@@ -2187,10 +2191,29 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
                                     "for the automatically created Tor onion service."),
                                   onion_service_target.ToStringAddrPort()));
         }
-        StartTorControl(onion_service_target);
+        node.tor_controller = std::make_unique<TorController>(gArgs.GetArg("-torcontrol", DEFAULT_TOR_CONTROL), onion_service_target);
     }
 
-    if (connOptions.bind_on_any) {
+    bool should_discover = connOptions.bind_on_any;
+    if (!should_discover) {
+        for (const auto& bind : connOptions.vBinds) {
+            if (bind.IsBindAny()) {
+                should_discover = true;
+                break;
+            }
+        }
+    }
+
+    if (!should_discover) {
+        for (const auto& whitebind : connOptions.vWhiteBinds) {
+            if (whitebind.m_service.IsBindAny()) {
+                should_discover = true;
+                break;
+            }
+        }
+    }
+
+    if (should_discover) {
         // Only add all IP addresses of the machine if we would be listening on
         // any address - 0.0.0.0 (IPv4) and :: (IPv6).
         Discover();

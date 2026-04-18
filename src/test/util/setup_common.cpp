@@ -200,7 +200,6 @@ BasicTestingSetup::BasicTestingSetup(const ChainType chainType, TestOpts opts)
     gArgs.ForceSetArg("-datadir", fs::PathToString(m_path_root));
 
     SelectParams(chainType);
-    if (G_TEST_LOG_FUN) LogInstance().PushBackCallback(G_TEST_LOG_FUN);
     InitLogging(*m_node.args);
     AppInitParameterInteraction(*m_node.args);
     LogInstance().StartLogging();
@@ -466,8 +465,7 @@ std::pair<CMutableTransaction, CAmount> TestChain100Setup::CreateValidTransactio
         keystore.AddKey(input_signing_key);
     }
     // - Populate a CoinsViewCache with the unspent output
-    CCoinsView coins_view;
-    CCoinsViewCache coins_cache(&coins_view);
+    CCoinsViewCache coins_cache{&CoinsViewEmpty::Get()};
     for (const auto& input_transaction : input_transactions) {
         AddCoins(coins_cache, *input_transaction.get(), input_height);
     }
