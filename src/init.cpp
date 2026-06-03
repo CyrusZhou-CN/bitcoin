@@ -9,6 +9,7 @@
 
 #include <kernel/checks.h>
 
+#include <addrdb.h>
 #include <addrman.h>
 #include <banman.h>
 #include <blockfilter.h>
@@ -18,13 +19,15 @@
 #include <chainparamsbase.h>
 #include <clientversion.h>
 #include <common/args.h>
+#include <common/messages.h>
 #include <common/system.h>
-#include <consensus/amount.h>
-#include <consensus/consensus.h>
-#include <deploymentstatus.h>
-#include <hash.h>
+#include <compat/compat.h>
+#include <consensus/params.h>
+#include <crypto/hex_base.h>
+#include <dbwrapper.h>
 #include <httprpc.h>
 #include <httpserver.h>
+#include <index/base.h>
 #include <index/blockfilterindex.h>
 #include <index/coinstatsindex.h>
 #include <index/txindex.h>
@@ -36,14 +39,18 @@
 #include <interfaces/mining.h>
 #include <interfaces/node.h>
 #include <ipc/exception.h>
+#include <kernel/blockmanager_opts.h>
 #include <kernel/caches.h>
+#include <kernel/chainstatemanager_opts.h>
 #include <kernel/context.h>
+#include <kernel/notifications_interface.h>
 #include <key.h>
 #include <logging.h>
 #include <mapport.h>
 #include <net.h>
 #include <net_permissions.h>
 #include <net_processing.h>
+#include <netaddress.h>
 #include <netbase.h>
 #include <netgroup.h>
 #include <node/blockmanager_args.h>
@@ -57,7 +64,8 @@
 #include <node/mempool_args.h>
 #include <node/mempool_persist.h>
 #include <node/mempool_persist_args.h>
-#include <node/miner.h>
+#include <node/mining_args.h>
+#include <node/mining_types.h>
 #include <node/peerman_args.h>
 #include <policy/feerate.h>
 #include <policy/fees/block_policy_estimator.h>
@@ -65,16 +73,18 @@
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <protocol.h>
-#include <rpc/blockchain.h>
+#include <random.h>
 #include <rpc/register.h>
 #include <rpc/server.h>
 #include <rpc/util.h>
 #include <scheduler.h>
 #include <script/sigcache.h>
 #include <sync.h>
+#include <tinyformat.h>
 #include <torcontrol.h>
-#include <txdb.h>
+#include <txgraph.h>
 #include <txmempool.h>
+#include <uint256.h>
 #include <util/asmap.h>
 #include <util/batchpriority.h>
 #include <util/chaintype.h>
@@ -96,21 +106,31 @@
 #include <walletinitinterface.h>
 
 #include <algorithm>
+#include <any>
 #include <cerrno>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
+#include <exception>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
+#include <list>
+#include <memory>
+#include <new>
+#include <optional>
 #include <set>
+#include <span>
 #include <string>
+#include <system_error>
 #include <thread>
+#include <tuple>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #ifndef WIN32
 #include <csignal>
-#include <sys/stat.h>
 #endif
 
 #ifdef ENABLE_ZMQ
@@ -123,7 +143,6 @@
 #include <node/data/ip_asn.dat.h>
 #endif
 
-using common::AmountErrMsg;
 using common::InvalidPortErrMsg;
 using common::ResolveErrMsg;
 
@@ -525,7 +544,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-pid=<file>", strprintf("Specify pid file. Relative paths will be prefixed by a net-specific datadir location. (default: %s)", BITCOIN_PID_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-prune=<n>", strprintf("Reduce storage requirements by enabling pruning (deleting) of old blocks. This allows the pruneblockchain RPC to be called to delete specific blocks and enables automatic pruning of old blocks if a target size in MiB is provided. This mode is incompatible with -txindex. "
             "Warning: Reverting this setting requires re-downloading the entire blockchain. "
-            "(default: 0 = disable pruning blocks, 1 = allow manual pruning via RPC, >=%u = automatically prune block files to stay under the specified target size in MiB)", MIN_DISK_SPACE_FOR_BLOCK_FILES / 1024 / 1024), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+            "(default: 0 = disable pruning blocks, 1 = allow manual pruning via RPC, >=%u = automatically prune block files to stay under the specified target size in MiB)", MIN_DISK_SPACE_FOR_BLOCK_FILES / 1_MiB), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-reindex", "If enabled, wipe chain state and block index, and rebuild them from blk*.dat files on disk. Also wipe and rebuild other optional indexes that are active. If an assumeutxo snapshot was loaded, its chainstate will be wiped as well. The snapshot can then be reloaded via RPC.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-reindex-chainstate", "If enabled, wipe chain state, and rebuild it from blk*.dat files on disk. If an assumeutxo snapshot was loaded, its chainstate will be wiped as well. The snapshot can then be reloaded via RPC.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-settings=<file>", strprintf("Specify path to dynamic settings data file. Can be disabled with -nosettings. File is written at runtime and not meant to be edited by users (use %s instead for custom settings). Relative paths will be prefixed by datadir location. (default: %s)", BITCOIN_CONF_FILENAME, BITCOIN_SETTINGS_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -1073,27 +1092,9 @@ bool AppInitParameterInteraction(const ArgsManager& args)
         return InitError(Untranslated("peertimeout must be a positive integer."));
     }
 
-    if (const auto arg{args.GetArg("-blockmintxfee")}) {
-        if (!ParseMoney(*arg)) {
-            return InitError(AmountErrMsg("blockmintxfee", *arg));
-        }
-    }
-
-    {
-        const auto max_block_weight = args.GetIntArg("-blockmaxweight", DEFAULT_BLOCK_MAX_WEIGHT);
-        if (max_block_weight > MAX_BLOCK_WEIGHT) {
-            return InitError(strprintf(_("Specified -blockmaxweight (%d) exceeds consensus maximum block weight (%d)"), max_block_weight, MAX_BLOCK_WEIGHT));
-        }
-    }
-
-    {
-        const auto block_reserved_weight = args.GetIntArg("-blockreservedweight", DEFAULT_BLOCK_RESERVED_WEIGHT);
-        if (block_reserved_weight > MAX_BLOCK_WEIGHT) {
-            return InitError(strprintf(_("Specified -blockreservedweight (%d) exceeds consensus maximum block weight (%d)"), block_reserved_weight, MAX_BLOCK_WEIGHT));
-        }
-        if (block_reserved_weight < MINIMUM_BLOCK_RESERVED_WEIGHT) {
-            return InitError(strprintf(_("Specified -blockreservedweight (%d) is lower than minimum safety value of (%d)"), block_reserved_weight, MINIMUM_BLOCK_RESERVED_WEIGHT));
-        }
+    auto mining_result{node::ReadMiningArgs(args)};
+    if (!mining_result) {
+        return InitError(util::ErrorString(mining_result));
     }
 
     nBytesPerSigOp = args.GetIntArg("-bytespersigop", nBytesPerSigOp);
@@ -1327,9 +1328,12 @@ static ChainstateLoadResult InitAndLoadChainstate(
     if (!mempool_error.empty()) {
         return {ChainstateLoadStatus::FAILURE_FATAL, mempool_error};
     }
+    auto mining_args{node::ReadMiningArgs(args)};
+    Assert(mining_args); // no error can happen, already checked in AppInitParameterInteraction
+    node.mining_args = std::move(*mining_args);
     LogInfo("* Using %.1f MiB for in-memory UTXO set (plus up to %.1f MiB of unused mempool space)",
-            cache_sizes.coins * (1.0 / 1024 / 1024),
-            mempool_opts.max_size_bytes * (1.0 / 1024 / 1024));
+            cache_sizes.coins / double(1_MiB),
+            mempool_opts.max_size_bytes / double(1_MiB));
     ChainstateManager::Options chainman_opts{
         .chainparams = chainparams,
         .datadir = args.GetDataDirNet(),
@@ -1467,7 +1471,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 
     // Check disk space every 5 minutes to avoid db corruption.
     scheduler.scheduleEvery([&args, &node]{
-        constexpr uint64_t min_disk_space = 50 << 20; // 50 MB
+        constexpr uint64_t min_disk_space{50_MiB};
         if (!CheckDiskSpace(args.GetBlocksDirPath(), min_disk_space)) {
             LogError("Shutting down due to lack of disk space!\n");
             if (!(Assert(node.shutdown_request))()) {
@@ -1835,18 +1839,18 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     const auto [index_cache_sizes, kernel_cache_sizes] = CalculateCacheSizes(args, g_enabled_filter_types.size());
 
     LogInfo("Cache configuration:");
-    LogInfo("* Using %.1f MiB for block index database", kernel_cache_sizes.block_tree_db * (1.0 / 1024 / 1024));
+    LogInfo("* Using %.1f MiB for block index database", kernel_cache_sizes.block_tree_db / double(1_MiB));
     if (args.GetBoolArg("-txindex", DEFAULT_TXINDEX)) {
-        LogInfo("* Using %.1f MiB for transaction index database", index_cache_sizes.tx_index * (1.0 / 1024 / 1024));
+        LogInfo("* Using %.1f MiB for transaction index database", index_cache_sizes.tx_index / double(1_MiB));
     }
     if (args.GetBoolArg("-txospenderindex", DEFAULT_TXOSPENDERINDEX)) {
-        LogInfo("* Using %.1f MiB for transaction output spender index database", index_cache_sizes.txospender_index * (1.0 / 1024 / 1024));
+        LogInfo("* Using %.1f MiB for transaction output spender index database", index_cache_sizes.txospender_index / double(1_MiB));
     }
     for (BlockFilterType filter_type : g_enabled_filter_types) {
         LogInfo("* Using %.1f MiB for %s block filter index database",
-                  index_cache_sizes.filter_index * (1.0 / 1024 / 1024), BlockFilterTypeName(filter_type));
+                  index_cache_sizes.filter_index / double(1_MiB), BlockFilterTypeName(filter_type));
     }
-    LogInfo("* Using %.1f MiB for chain state database", kernel_cache_sizes.coins_db * (1.0 / 1024 / 1024));
+    LogInfo("* Using %.1f MiB for chain state database", kernel_cache_sizes.coins_db / double(1_MiB));
 
     assert(!node.mempool);
     assert(!node.chainman);
@@ -1972,7 +1976,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 
     // On first startup, warn on low block storage space
     if (!do_reindex && !do_reindex_chainstate && chain_active_height <= 1) {
-        uint64_t assumed_chain_bytes{chainparams.AssumedBlockchainSize() * 1024 * 1024 * 1024};
+        uint64_t assumed_chain_bytes{chainparams.AssumedBlockchainSize() * 1_GiB};
         uint64_t additional_bytes_needed{
             chainman.m_blockman.IsPruneMode() ?
                 std::min(chainman.m_blockman.GetPruneTarget(), assumed_chain_bytes) :
@@ -2027,6 +2031,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         vImportFiles.push_back(fs::PathFromString(strFile));
     }
 
+    /// \anchor initload
     node.background_init_thread = std::thread(&util::TraceThread, "initload", [=, &chainman, &args, &node] {
         ScheduleBatchPriority();
         // Import blocks and ActivateBestChain()
@@ -2370,8 +2375,11 @@ bool StartIndexBackgroundSync(NodeContext& node)
             {
                 LOCK(::cs_main);
                 pindex = chainman.m_blockman.LookupBlockIndex(summary.best_block_hash);
-                if (!index_chain.Contains(pindex)) {
-                    pindex = index_chain.FindFork(pindex);
+                if (!pindex) {
+                    LogWarning("Failed to find block manager entry for best block %s from %s, falling back to genesis for index sync",
+                        summary.best_block_hash.ToString(), summary.name);
+                } else if (!index_chain.Contains(*pindex)) {
+                    pindex = index_chain.FindFork(*pindex);
                 }
             }
             if (!pindex) {
