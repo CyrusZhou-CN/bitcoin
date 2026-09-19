@@ -40,10 +40,10 @@ code.
     - Class member variables have a `m_` prefix.
     - Global variables have a `g_` prefix.
   - Constant names are all uppercase, and use `_` to separate words.
-  - Enumerator constants may be `snake_case`, `PascalCase` or `ALL_CAPS`.
-    This is a more tolerant policy than the [C++ Core
+  - Enumerator constants may be `snake_case`, or `PascalCase`. They should not
+    be `ALL_CAPS`, according to the [C++ Core
     Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#renum-caps),
-    which recommend using `snake_case`.  Please use what seems appropriate.
+    to avoid clashing with macros.
   - Class names, function names, and method names are UpperCamelCase
     (PascalCase). Do not prefix class names with `C`. See [Internal interface
     naming style](#internal-interface-naming-style) for an exception to this
@@ -562,9 +562,8 @@ For IWYU pragmas, prefer adding a nearby source comment that explains why the an
 
 Profiling is a good way to get a precise idea of where time is being spent in
 code. One tool for doing profiling on Linux platforms is called
-[`perf`](https://www.brendangregg.com/perf.html), and has been integrated into
-the functional test framework. Perf can observe a running process and sample
-(at some frequency) where its execution is.
+[`perf`](https://www.brendangregg.com/perf.html). It can observe a running
+process and sample (at some frequency) where its execution is.
 
 Perf installation is contingent on which kernel version you're running; see
 [this thread](https://askubuntu.com/questions/50145/how-to-install-perf-monitoring-tool)
@@ -598,8 +597,6 @@ perf report --stdio | c++filt | less
 ```
 
 or using a graphical tool like [Hotspot](https://github.com/KDAB/hotspot).
-
-See the functional test documentation for how to invoke perf within tests.
 
 ### Valgrind
 
@@ -676,6 +673,35 @@ Additional resources:
 A few non-style-related recommendations for developers, as well as points to
 pay attention to for reviewers of Bitcoin Core code.
 
+## General Testing
+
+As a rule of thumb, an externally observable change (new feature, bug fix, or
+changed default) should be accompanied by an automated test.
+New tests are usually not needed for behavior-preserving work that is easy to
+validate, such as moving code, renaming, or mechanical refactors.
+When an automated test would be brittle or have limited long-term value,
+a manual testing guide in the commit message or PR description is an
+acceptable alternative.
+
+### Commit Structure for Tests
+
+Test placement depends on existing coverage and the type of change:
+
+* When existing tests already cover the behavior being changed, update them in
+  the same commit as the change. The diff records the old and new expectations
+  together and shows the change was intentional.
+* For a simple feature or bug fix without existing coverage, the change and its
+  test can often be in the same commit.
+* For a non-trivial refactor, if the relevant invariant is not already covered
+  by automated tests, first add that coverage in a separate test commit. The
+  refactor commit should not need to update test expectations.
+* For a non-trivial change to existing behavior without coverage, consider
+  adding a preceding commit with a [characterization test](https://en.wikipedia.org/wiki/Characterization_test)
+  to document the current behavior. Mark assertions whose expected values will
+  change with `TODO` comments so they are not mistaken for intended behavior.
+  Remove the comments when updating those assertions in the behavior-changing
+  commit.
+
 ## Locking/mutex usage notes
 
 The code is multi-threaded and uses mutexes and the
@@ -702,16 +728,16 @@ and its `cs_KeyStore` lock for example).
   : Performs various loading tasks that are part of init but shouldn't block the node from being started: external block import,
    reindex, reindex-chainstate, main chain activation, spawn indexes background sync threads and mempool load.
 
-- [CCheckQueue::Loop (`b-scriptch.x`)](https://doxygen.bitcoincore.org/class_c_check_queue.html#checkqueue)
+- [CCheckQueue::Loop (`b-scriptch.xx`)](https://doxygen.bitcoincore.org/class_c_check_queue.html#checkqueue)
   : Parallel script validation threads for transactions in blocks.
 
 - [ThreadHTTP (`b-http`)](https://doxygen.bitcoincore.org/httpserver_8cpp.html#http)
-  : Libevent thread to listen for RPC and REST connections.
+  : Thread to listen for RPC and REST connections.
 
-- [HTTP worker threads (`b-http_pool_x`)](https://doxygen.bitcoincore.org/httpserver_8cpp.html#http_pool)
+- [HTTP worker threads (`b-http.xx`)](https://doxygen.bitcoincore.org/httpserver_8cpp.html#http_pool)
   : Threads to service RPC and REST requests.
 
-- [Indexer threads (`b-txindex`, etc)](https://doxygen.bitcoincore.org/class_base_index.html#index_sync)
+- [Indexer threads (`b-txidx`, `b-blkfltbscidx`, `b-coinstatsidx`, `b-txospenderidx`)](https://doxygen.bitcoincore.org/class_base_index.html#index_sync)
   : One thread per indexer.
 
 - [SchedulerThread (`b-scheduler`)](https://doxygen.bitcoincore.org/class_c_scheduler.html#scheduler)
@@ -719,7 +745,7 @@ and its `cs_KeyStore` lock for example).
   addrman and running asynchronous validationinterface callbacks.
 
 - [TorControlThread (`b-torcontrol`)](https://doxygen.bitcoincore.org/class_tor_controller.html#torcontrol)
-  : Libevent thread for tor connections.
+  : Thread for tor connections.
 
 - Net threads:
 

@@ -19,6 +19,10 @@ Getting Started
 
 New contributors are very welcome and needed.
 
+If you use AI tools while contributing, please read and follow the [AI
+policy](/doc/AI_POLICY.md). Contributors are responsible for understanding and
+explaining their own work in their own words.
+
 In-depth reviewing and testing are the bottleneck of the project, and are the
 most effective way anyone can start to contribute. It will teach you much more
 about the code and process than opening pull requests, and may help you uncover
@@ -102,7 +106,8 @@ fixes or code moves with actual code changes.
 
 Make sure each individual commit is hygienic: that it builds successfully on its
 own without warnings, errors, regressions, or test failures.
-This means tests must be updated in the same commit that changes the behavior.
+See the [developer notes](doc/developer-notes.md#commit-structure-for-tests)
+for guidance on where test coverage belongs in a commit stack.
 
 Commit messages should be verbose by default consisting of a short subject line
 (50 chars max), a blank line and detailed explanatory text as separate

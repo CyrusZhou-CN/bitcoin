@@ -6,6 +6,7 @@
 #include <scheduler.h>
 #include <wallet/context.h>
 #include <wallet/rpc/util.h>
+#include <wallet/scan.h>
 #include <wallet/wallet.h>
 
 
@@ -60,8 +61,8 @@ RPCMethod walletpassphrase()
         if (nSleepTime < 0) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Timeout cannot be negative.");
         }
-        // Clamp timeout
-        constexpr int64_t MAX_SLEEP_TIME = 100000000; // larger values trigger a macos/libevent bug?
+        // Clamp timeout to ~3 years to avoid overflow when computing the relock time
+        constexpr int64_t MAX_SLEEP_TIME = 100000000;
         if (nSleepTime > MAX_SLEEP_TIME) {
             nSleepTime = MAX_SLEEP_TIME;
         }
@@ -138,7 +139,7 @@ RPCMethod walletpassphrasechange()
         throw JSONRPCError(RPC_WALLET_WRONG_ENC_STATE, "Error: running with an unencrypted wallet, but walletpassphrasechange was called.");
     }
 
-    if (pwallet->IsScanningWithPassphrase()) {
+    if (pwallet->Scanner().IsScanningWithPassphrase()) {
         throw JSONRPCError(RPC_WALLET_ERROR, "Error: the wallet is currently being used to rescan the blockchain for related transactions. Please call `abortrescan` before changing the passphrase.");
     }
 
@@ -203,7 +204,7 @@ RPCMethod walletlock()
         throw JSONRPCError(RPC_WALLET_WRONG_ENC_STATE, "Error: running with an unencrypted wallet, but walletlock was called.");
     }
 
-    if (pwallet->IsScanningWithPassphrase()) {
+    if (pwallet->Scanner().IsScanningWithPassphrase()) {
         throw JSONRPCError(RPC_WALLET_ERROR, "Error: the wallet is currently being used to rescan the blockchain for related transactions. Please call `abortrescan` before locking the wallet.");
     }
 
@@ -260,7 +261,7 @@ RPCMethod encryptwallet()
         throw JSONRPCError(RPC_WALLET_WRONG_ENC_STATE, "Error: running with an encrypted wallet, but encryptwallet was called.");
     }
 
-    if (pwallet->IsScanningWithPassphrase()) {
+    if (pwallet->Scanner().IsScanningWithPassphrase()) {
         throw JSONRPCError(RPC_WALLET_ERROR, "Error: the wallet is currently being used to rescan the blockchain for related transactions. Please call `abortrescan` before encrypting the wallet.");
     }
 

@@ -11,6 +11,7 @@ from test_framework.blocktools import (
     create_block,
 )
 from test_framework.descriptors import descsum_create
+from test_framework.extendedkey import ExtendedPrivateKey
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
@@ -41,6 +42,7 @@ class NotificationsTest(BitcoinTestFramework):
         self.num_nodes = 2
         self.setup_clean_chain = True
         self.uses_wallet = None
+        self.noban_tx_relay = True
 
     def setup_network(self):
         self.wallet = ''.join(chr(i) for i in range(FILE_CHAR_START, FILE_CHAR_END) if chr(i) not in FILE_CHARS_DISALLOWED)
@@ -74,7 +76,7 @@ class NotificationsTest(BitcoinTestFramework):
     def run_test(self):
         if self.is_wallet_compiled():
             # Setup the descriptors to be imported to the wallet
-            xpriv = "tprv8ZgxMBicQKsPfHCsTwkiM1KT56RXbGGTqvc2hgqzycpwbHqqpcajQeMRZoBD35kW4RtyCemu6j34Ku5DEspmgjKdt2qe4SvRch5Kk8B8A2v"
+            xpriv = ExtendedPrivateKey.generate().to_string()
             desc_imports = [{
                 "desc": descsum_create(f"wpkh({xpriv}/0/*)"),
                 "timestamp": 0,
@@ -173,6 +175,19 @@ class NotificationsTest(BitcoinTestFramework):
             self.sync_blocks()
             self.expect_wallet_notify([(bump2, blockheight2, blockhash2), (tx2, -1, UNCONFIRMED_HASH_STRING)])
             assert_equal(self.nodes[1].gettransaction(bump2)["confirmations"], 1)
+
+            if platform.system() != 'Windows':
+                self.log.info("test -walletnotify replacement metacharacters in wallet name")
+                self.nodes[1].unloadwallet(self.wallet)
+                command_marker = os.path.join(self.options.tmpdir, "walletnotify_injected")
+                # The previous regex replacement expanded `$'` to the command suffix, breaking the shell-escaped wallet name's quote accounting
+                wallet_name = self.nodes[1].createwallet(f"$'$'; echo Pwned > {os.path.basename(command_marker)}; #")["name"]
+                txid = self.nodes[0].sendtoaddress(self.nodes[1].get_wallet_rpc(wallet_name).getnewaddress(), 1)
+                self.sync_mempools()
+                notify_path = os.path.join(self.walletnotify_dir, notify_outputname(wallet_name, txid))
+                self.wait_until(lambda: os.path.exists(command_marker) or os.path.exists(notify_path), timeout=10)
+                assert not os.path.exists(command_marker)
+                assert os.path.exists(notify_path)
 
         self.log.info("test -alertnotify with large work invalid chain")
         # create a bunch of invalid blocks

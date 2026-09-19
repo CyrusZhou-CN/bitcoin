@@ -2,20 +2,36 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php.
 
+#include <addresstype.h>
 #include <bench/bench.h>
-#include <interfaces/chain.h>
+#include <consensus/amount.h>
 #include <interfaces/wallet.h>
-#include <kernel/chain.h>
-#include <kernel/types.h>
-#include <node/context.h>
-#include <test/util/mining.h>
+#include <key.h>
+#include <primitives/block.h>
+#include <primitives/transaction.h>
+#include <pubkey.h>
+#include <script/script.h>
+#include <sync.h>
 #include <test/util/setup_common.h>
-#include <wallet/context.h>
-#include <wallet/receive.h>
+#include <tinyformat.h>
+#include <uint256.h>
+#include <util/check.h>
+#include <util/result.h>
+#include <wallet/db.h>
+#include <wallet/scriptpubkeyman.h>
 #include <wallet/test/util.h>
+#include <wallet/transaction.h>
 #include <wallet/wallet.h>
+#include <wallet/walletdb.h>
 
+#include <algorithm>
+#include <cstdint>
+#include <cstddef>
+#include <memory>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace wallet{
 
@@ -74,7 +90,9 @@ static void WalletMigration(benchmark::Bench& bench)
                 CMutableTransaction mtx;
                 mtx.vout.emplace_back(COIN, GetScriptForDestination(dest));
                 mtx.vout.emplace_back(COIN, scripts_watch_only.at(j % NUM_WATCH_ONLY_ADDR).first);
-                mtx.vin.resize(2);
+                // Use distinct dummy prevouts so all txs don't appear to spend the same null outpoint
+                mtx.vin.emplace_back(COutPoint(Txid::FromUint256(uint256{uint8_t(j + 1)}), 0));
+                mtx.vin.emplace_back(COutPoint(Txid::FromUint256(uint256{uint8_t(j + 1)}), 1));
                 wallet->AddToWallet(MakeTransactionRef(mtx), TxStateInactive{}, /*update_wtx=*/nullptr, /*rescanning_old_block=*/true);
                 batch.WriteKey(pubkey, key.GetPrivKey(), CKeyMetadata());
             }

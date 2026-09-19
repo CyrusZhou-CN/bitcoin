@@ -10,7 +10,7 @@
 
 #include <cstdint>
 #include <cstdio>
-#include <iosfwd>
+#include <ios>
 #include <limits>
 #include <optional>
 #include <string>
@@ -45,7 +45,18 @@ bool FileCommit(FILE* file);
 void DirectoryCommit(const fs::path& dirname);
 
 bool TruncateFile(FILE* file, unsigned int length);
-int RaiseFileDescriptorLimit(int nMinFD);
+
+/**
+ * Try to raise the file descriptor limit to the requested number.
+ *
+ * @param[in] min_fd  The requested minimum number of file descriptors.
+ * @returns           The actual file descriptor limit. It may be lower or
+ *                    higher than min_fd. Returns std::numeric_limits<int>::max()
+ *                    if the OS imposes no limit (RLIM_INFINITY).
+ *
+ */
+int RaiseFileDescriptorLimit(int min_fd);
+
 void AllocateFileRange(FILE* file, unsigned int offset, unsigned int length);
 
 /**

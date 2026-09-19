@@ -104,7 +104,7 @@ void HTTPResponseHeaders::Read(util::LineReader& reader)
     // Headers https://httpwg.org/specs/rfc9110.html#rfc.section.6.3
     // A sequence of Field Lines https://httpwg.org/specs/rfc9110.html#rfc.section.5.2
     while (auto maybe_line = reader.ReadLine()) {
-        const std::string& line = *maybe_line;
+        const std::string_view line = *maybe_line;
 
         // An empty line indicates end of the headers section https://www.rfc-editor.org/rfc/rfc2616#section-4
         if (line.empty()) return;
@@ -142,11 +142,11 @@ static void SetupCliArgs(ArgsManager& argsman)
 {
     SetupHelpOptions(argsman);
 
-    const auto defaultBaseParams = CreateBaseChainParams(ChainType::MAIN);
-    const auto testnetBaseParams = CreateBaseChainParams(ChainType::TESTNET);
-    const auto testnet4BaseParams = CreateBaseChainParams(ChainType::TESTNET4);
-    const auto signetBaseParams = CreateBaseChainParams(ChainType::SIGNET);
-    const auto regtestBaseParams = CreateBaseChainParams(ChainType::REGTEST);
+    const auto defaultBaseParams = CreateBaseChainParams(argsman, ChainType::MAIN);
+    const auto testnetBaseParams = CreateBaseChainParams(argsman, ChainType::TESTNET);
+    const auto testnet4BaseParams = CreateBaseChainParams(argsman, ChainType::TESTNET4);
+    const auto signetBaseParams = CreateBaseChainParams(argsman, ChainType::SIGNET);
+    const auto regtestBaseParams = CreateBaseChainParams(argsman, ChainType::REGTEST);
 
     argsman.AddArg("-version", "Print version and exit", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-conf=<file>", strprintf("Specify configuration file. Relative paths will be prefixed by datadir location. (default: %s)", BITCOIN_CONF_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -912,11 +912,11 @@ bool HTTPClient::SendRequest(std::string_view request)
         Sock::Event event{0};
         auto time_left = std::chrono::duration_cast<std::chrono::milliseconds>(
             deadline - std::chrono::steady_clock::now());
-        if (time_left.count() <= 0 || !m_socket->Wait(time_left, Sock::SEND, &event)) {
+        if (time_left.count() <= 0 || !m_socket->Wait(time_left, Sock::SendEvent, &event)) {
             return false;
         }
 
-        if (!(event & Sock::SEND)) {
+        if (!(event & Sock::SendEvent)) {
             continue;
         }
 
@@ -965,7 +965,7 @@ HTTPResponse HTTPClient::ReadResponse()
         throw HTTPError{"Failed to read status line"};
     }
 
-    const std::string& status_str = *status_line;
+    const std::string_view status_str = *status_line;
     // Minimum status line is "HTTP/X.Y NNN" (e.g. "HTTP/1.1 200"), 12 characters.
     if (status_str.size() < 12 || !status_str.starts_with("HTTP/")) {
         throw HTTPError{"Invalid status line"};
@@ -976,7 +976,7 @@ HTTPResponse HTTPClient::ReadResponse()
         throw HTTPError{"Invalid status line format"};
     }
 
-    std::string status_code_str = status_str.substr(space1 + 1, 3);
+    const std::string_view status_code_str = status_str.substr(space1 + 1, 3);
     auto status_code = ToIntegral<int>(status_code_str);
     if (!status_code) {
         throw HTTPError{"Invalid status code"};
@@ -1122,10 +1122,10 @@ std::optional<std::string> HTTPClient::Recv(const std::chrono::time_point<std::c
 {
     auto wait_for_readable{[this](std::chrono::milliseconds timeout) -> bool {
         Sock::Event event{0};
-        if (!m_socket->Wait(timeout, Sock::RECV, &event)) {
+        if (!m_socket->Wait(timeout, Sock::RecvEvent, &event)) {
             return false;
         }
-        return (event & Sock::RECV) != 0;
+        return (event & Sock::RecvEvent) != 0;
     }};
 
     auto time_left = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1236,10 +1236,12 @@ static UniValue CallRPC(BaseRequestHandler* rh, const std::string& strMethod, co
 
     if (response.status == HTTP_UNAUTHORIZED) {
         std::string error{"Authorization failed: "};
+        bool read_err = false;
         if (auth_cookie_result.has_value()) {
             switch (*auth_cookie_result) {
             case AuthCookieResult::Error:
                 error += "Failed to read cookie file and no rpcpassword was specified.";
+                read_err = true;
                 break;
             case AuthCookieResult::Disabled:
                 error += "Cookie file was disabled via -norpccookiefile and no rpcpassword was specified.";
@@ -1252,6 +1254,9 @@ static UniValue CallRPC(BaseRequestHandler* rh, const std::string& strMethod, co
             error += "Incorrect rpcuser or rpcpassword were specified.";
         }
         error += strprintf(" Configuration file: (%s)", fs::PathToString(gArgs.GetConfigFilePath()));
+        if (gArgs.GetChainType() == ChainType::SIGNET && read_err) {
+            error += "\nIs your -signetchallenge correct for custom signets?";
+        }
         throw std::runtime_error(error);
     } else if (response.status == HTTP_SERVICE_UNAVAILABLE) {
         throw std::runtime_error(strprintf("Server response: %s", response.body));

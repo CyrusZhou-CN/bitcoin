@@ -40,8 +40,10 @@ FUZZ_TARGET(p2p_handshake, .init = ::initialize)
 
     auto& node{g_setup->m_node};
     auto& connman{static_cast<ConnmanTestMsg&>(*node.connman)};
+    connman.Reset();
     auto& chainman{static_cast<TestChainstateManager&>(*node.chainman)};
-    NodeClockContext clock_ctx{1610000000s}; // any time to successfully reset ibd
+    FakeNodeClock clock{1610000000s}; // 2021-01-07, arbitrary
+    FakeSteadyClock steady_clock;
     chainman.ResetIbd();
 
     node.banman.reset();
@@ -64,15 +66,18 @@ FUZZ_TARGET(p2p_handshake, .init = ::initialize)
     std::vector<CNode*> peers;
     const auto num_peers_to_add = fuzzed_data_provider.ConsumeIntegralInRange(1, 3);
     for (int i = 0; i < num_peers_to_add; ++i) {
-        peers.push_back(ConsumeNodeAsUniquePtr(fuzzed_data_provider, i).release());
+        peers.push_back(ConsumeNodeAsUniquePtr(fuzzed_data_provider, steady_clock, i).release());
         connman.AddTestNode(*peers.back());
         node.peerman->InitializeNode(
             *peers.back(),
             static_cast<ServiceFlags>(fuzzed_data_provider.ConsumeIntegral<uint64_t>()));
     }
 
-    LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 100)
-    {
+    // Toggle IBD from within the loop, so that some messages may be processed
+    // under IBD and the rest after leaving it. JumpOutOfIbd() latches, so guard
+    // it to call at most once.
+    bool jump_out_of_ibd{false};
+    LIMITED_WHILE (fuzzed_data_provider.ConsumeBool(), 100) {
         CNode& connection = *PickValue(fuzzed_data_provider, peers);
         if (connection.fDisconnect || connection.fSuccessfullyConnected) {
             // Skip if the connection was disconnected or if the version
@@ -80,7 +85,10 @@ FUZZ_TARGET(p2p_handshake, .init = ::initialize)
             continue;
         }
 
-        clock_ctx += std::chrono::seconds{
+        if (!jump_out_of_ibd) jump_out_of_ibd = fuzzed_data_provider.ConsumeBool();
+        if (jump_out_of_ibd && chainman.IsInitialBlockDownload()) chainman.JumpOutOfIbd();
+
+        clock += std::chrono::seconds{
                     fuzzed_data_provider.ConsumeIntegralInRange<int64_t>(
                         -std::chrono::seconds{10min}.count(), // Allow mocktime to go backwards slightly
                         std::chrono::seconds{TIMEOUT_INTERVAL}.count()),

@@ -15,7 +15,7 @@ struct secp256k1_musig_keyagg_cache;
 class MuSig2SecNonceImpl;
 struct secp256k1_musig_secnonce;
 
-constexpr size_t MUSIG2_PUBNONCE_SIZE{66};
+inline constexpr size_t MUSIG2_PUBNONCE_SIZE{66};
 
 //! Compute the full aggregate pubkey from the given participant pubkeys in their current order.
 //! Outputs the secp256k1_musig_keyagg_cache and validates that the computed aggregate pubkey matches an expected aggregate pubkey.
@@ -59,7 +59,7 @@ public:
 
 /**
  * Computes an arbitrary unique session ID to identify ongoing signing sessions.
- * It is the SHA256 of the aggregate xonly key, the participant pubkey, the sighash, and the pubnonce
+ * It is the SHA256 of the signing (aggregate) pubkey, the participant pubkey, the sighash, and the pubnonce
  */
 uint256 MuSig2SessionID(const CPubKey& script_pubkey, const CPubKey& part_pubkey, const uint256& sighash, const std::vector<uint8_t>& pubnonce);
 

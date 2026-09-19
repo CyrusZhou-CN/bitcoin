@@ -50,7 +50,7 @@ See [dependencies.md](dependencies.md) for a complete overview.
 To install, run the following from your terminal:
 
 ``` bash
-brew install cmake boost pkgconf libevent capnp
+brew install cmake boost capnp
 ```
 
 #### Wallet Dependencies
@@ -106,11 +106,11 @@ Otherwise, if you don't need QR encoding support, you can pass `-DWITH_QRENCODE=
 
 #### ZMQ Dependencies
 
-Support for ZMQ notifications requires the following dependency.
+Bitcoin Core can provide notifications via ZeroMQ. To compile ZMQ support, install the following dependency and pass `-DWITH_ZMQ=ON` when configuring.
 Skip if you do not need ZMQ functionality.
 
 ``` bash
-brew install zeromq
+brew install zeromq pkgconf
 ```
 
 Check out the [further configuration](#further-configuration) section for more information.

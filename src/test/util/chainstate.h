@@ -17,7 +17,7 @@
 
 #include <univalue.h>
 
-const auto NoMalleation = [](AutoFile& file, node::SnapshotMetadata& meta){};
+inline constexpr auto NoMalleation = [](AutoFile& file, node::SnapshotMetadata& meta){};
 
 /**
  * Create and activate a UTXO snapshot, optionally providing a function to
@@ -80,7 +80,7 @@ CreateAndActivateUTXOSnapshot(
             node.chainman->ResetChainstates();
             node.chainman->InitializeChainstate(node.mempool.get());
             Chainstate& chain = node.chainman->ActiveChainstate();
-            Assert(chain.LoadGenesisBlock());
+            Assert(node.chainman->LoadGenesisBlock());
             // These cache values will be corrected shortly in `MaybeRebalanceCaches`.
             chain.InitCoinsDB(1_MiB, /*in_memory=*/true, /*should_wipe=*/false);
             chain.InitCoinsCache(1_MiB);
