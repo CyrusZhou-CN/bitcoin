@@ -672,7 +672,8 @@ FilteredOutputGroups GroupOutputs(const CWallet& wallet,
                     filtered_groups[filter].Push(group, type, positive_only, /*insert_mixed=*/!positive_only);
                     accepted = true;
                 }
-                if (!accepted) ret_discarded_groups.emplace_back(group);
+                // The positive-only groups are a subset of the mixed ones, don't record them twice
+                if (!accepted && !positive_only) ret_discarded_groups.emplace_back(group);
             }
         }
     };
@@ -1417,8 +1418,13 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
         return util::Error{_("Transaction too large")};
     }
 
-    if (current_fee > wallet.m_default_max_tx_fee) {
+    if (current_fee > wallet.m_max_tx_fee) {
         return util::Error{TransactionErrorString(TransactionError::MAX_FEE_EXCEEDED)};
+    }
+
+    const int64_t tx_vsize{GetVirtualTransactionSize(*tx)};
+    if (current_fee > wallet.m_max_tx_fee_rate.GetFee(tx_vsize)) {
+        return util::Error{TransactionErrorString(TransactionError::MAX_FEE_RATE_EXCEEDED)};
     }
 
     if (gArgs.GetBoolArg("-walletrejectlongchains", DEFAULT_WALLET_REJECT_LONG_CHAINS)) {
@@ -1433,8 +1439,8 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     // accidental reuse.
     reservedest.KeepDestination();
 
-    wallet.WalletLogPrintf("Coin Selection: Algorithm:%s, Waste Metric Score:%d\n", GetAlgorithmName(result.GetAlgo()), result.GetWaste());
-    wallet.WalletLogPrintf("Fee Calculation: Fee:%d Bytes:%u, Source: %s\n",
+    wallet.WalletLogPrintf("Coin Selection: Algorithm:%s, Waste Metric Score:%d", GetAlgorithmName(result.GetAlgo()), result.GetWaste());
+    wallet.WalletLogPrintf("Fee Calculation: Fee:%d Bytes:%u, Source: %s",
                            current_fee, nBytes, StringForFeeReason(min_fee_rate.fee_reason));
     return CreatedTransactionResult(tx, current_fee, change_pos, min_fee_rate.fee_reason);
 }
@@ -1485,7 +1491,7 @@ util::Result<CreatedTransactionResult> CreateTransaction(
                txr_grouped.has_value() ? txr_grouped->fee : 0,
                txr_grouped.has_value() && txr_grouped->change_pos.has_value() ? int32_t(*txr_grouped->change_pos) : -1);
         if (txr_grouped) {
-            wallet.WalletLogPrintf("Fee non-grouped = %lld, grouped = %lld, using %s\n",
+            wallet.WalletLogPrintf("Fee non-grouped = %lld, grouped = %lld, using %s",
                 txr_ungrouped.fee, txr_grouped->fee, use_aps ? "grouped" : "non-grouped");
             if (use_aps) return txr_grouped;
         }

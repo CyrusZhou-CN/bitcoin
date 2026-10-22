@@ -57,11 +57,11 @@ util::Expected<void, std::string> CheckDescriptorRangeBounds(int64_t low, int64_
     if ((high >> 31) != 0) {
         return util::Unexpected<std::string>("End of range is too high");
     }
-    if (high >= low + 1000000) {
-        return util::Unexpected<std::string>("Range is too large");
-    }
     if (low > high) {
         return util::Unexpected<std::string>("Range specified as [begin,end] must not have begin after end");
+    }
+    if (high - low >= 1000000) {
+        return util::Unexpected<std::string>("Range is too large");
     }
     return {};
 }
@@ -266,6 +266,26 @@ public:
 
     /** Whether this PubkeyProvider can always provide a public key without cache or private key arguments */
     virtual bool CanSelfExpand() const = 0;
+
+protected:
+    static bool DetermineApostropheUse(StringType type, bool normalized, bool public_apostrophe)
+    {
+        bool use_apostrophe{false};
+        switch (type) {
+        case StringType::COMPAT:
+            // COMPAT always uses apostrophe to stay compatible with previous versions
+            use_apostrophe = true;
+            break;
+        case StringType::CANONICAL:
+            // CANONICAL always uses h
+            use_apostrophe = false;
+            break;
+        case StringType::PUBLIC:
+            use_apostrophe = !normalized && public_apostrophe;
+            break;
+        } // no default case, so the compiler can warn about missing cases
+        return use_apostrophe;
+    }
 };
 
 class OriginPubkeyProvider final : public PubkeyProvider
@@ -276,8 +296,7 @@ class OriginPubkeyProvider final : public PubkeyProvider
 
     std::string OriginString(StringType type, bool normalized=false) const
     {
-        // If StringType==COMPAT, always use the apostrophe to stay compatible with previous versions
-        bool use_apostrophe = (type != StringType::CANONICAL && !normalized && m_apostrophe) || type == StringType::COMPAT;
+        bool use_apostrophe{DetermineApostropheUse(type, normalized, m_apostrophe)};
         return HexStr(m_origin.fingerprint) + FormatHDKeypath(m_origin.path, use_apostrophe);
     }
 
@@ -526,8 +545,7 @@ public:
     }
     std::string ToString(StringType type, bool normalized) const
     {
-        // If StringType==COMPAT, always use the apostrophe to stay compatible with previous versions
-        const bool use_apostrophe = (type != StringType::CANONICAL && !normalized && m_apostrophe) || type == StringType::COMPAT;
+        bool use_apostrophe{DetermineApostropheUse(type, normalized, m_apostrophe)};
         std::string ret = EncodeExtPubKey(m_root_extkey) + FormatHDKeypath(m_path, /*apostrophe=*/use_apostrophe);
         if (IsRange()) {
             ret += "/*";
@@ -742,10 +760,10 @@ public:
         std::string out = "musig(";
         for (size_t i = 0; i < m_participants.size(); ++i) {
             const auto& pubkey = m_participants.at(i);
-            if (i) out += ",";
+            if (i) out += ',';
             out += pubkey->ToString(type);
         }
-        out += ")";
+        out += ')';
         out += FormatHDKeypath(m_path);
         if (IsRangedDerivation()) {
             out += "/*";
@@ -758,14 +776,14 @@ public:
         out = "musig(";
         for (size_t i = 0; i < m_participants.size(); ++i) {
             const auto& pubkey = m_participants.at(i);
-            if (i) out += ",";
+            if (i) out += ',';
             std::string tmp;
             if (pubkey->ToPrivateString(arg, tmp)) {
                 any_privkeys = true;
             }
             out += tmp;
         }
-        out += ")";
+        out += ')';
         out += FormatHDKeypath(m_path);
         if (IsRangedDerivation()) {
             out += "/*";
@@ -777,14 +795,14 @@ public:
         out = "musig(";
         for (size_t i = 0; i < m_participants.size(); ++i) {
             const auto& pubkey = m_participants.at(i);
-            if (i) out += ",";
+            if (i) out += ',';
             std::string tmp;
             if (!pubkey->ToNormalizedString(arg, tmp, cache)) {
                 return false;
             }
             out += tmp;
         }
-        out += ")";
+        out += ')';
         out += FormatHDKeypath(m_path);
         if (IsRangedDerivation()) {
             out += "/*";
@@ -942,7 +960,7 @@ public:
         // Initialize to true for non-private types.
         bool any_success{!is_private};
         for (const auto& scriptarg : m_subdescriptor_args) {
-            if (pos++) ret += ",";
+            if (pos++) ret += ',';
             std::string tmp;
             bool subscript_res{scriptarg->ToStringHelper(arg, tmp, type, cache)};
             if (!is_private && !subscript_res) return false;
@@ -964,7 +982,7 @@ public:
         bool any_success{!is_private};
 
         for (const auto& pubkey : m_pubkey_args) {
-            if (pos++) ret += ",";
+            if (pos++) ret += ',';
             std::string tmp;
             switch (type) {
                 case StringType::NORMALIZED:

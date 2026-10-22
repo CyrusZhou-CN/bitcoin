@@ -101,7 +101,7 @@ public:
      * @param[in] key The field-name of the header to search for
      * @returns Views into all values matching the provided key (valid while this object is alive)
      */
-    std::vector<std::string_view> FindAll(std::string_view key) const;
+    std::vector<std::string_view> FindAll(std::string_view key) const LIFETIMEBOUND;
     void Write(std::string&& key, std::string&& value);
     /**
      * @param[in] key The field-name of the header to search for and delete
@@ -178,7 +178,7 @@ public:
         WriteReply(status, std::as_bytes(std::span{reply_body_view}));
     }
 
-    const HTTPVersion& GetVersion() const { return m_version; }
+    const HTTPVersion& GetVersion() const LIFETIMEBOUND { return m_version; }
     std::shared_ptr<HTTPRemoteClient> GetClient() const { return m_client.lock(); }
 
     // These methods reimplement the API from http_libevent::HTTPRequest
@@ -493,14 +493,15 @@ class HTTPRemoteClient
 {
 public:
     explicit HTTPRemoteClient(HTTPServer::Id id, const CService& addr, std::unique_ptr<Sock> socket)
-        : m_id(id), m_addr(addr), m_origin(addr.ToStringAddrPort()), m_sock{std::move(socket)}, m_idle_since{Now<SteadySeconds>()} {}
+        : m_id(id), m_addr(addr), m_origin(addr.ToStringAddrPort()), m_sock{std::move(socket)}, m_idle_since{MockableSteadyClock::now()} {}
 
     // Disable copies (should only be used as shared pointers)
     HTTPRemoteClient(const HTTPRemoteClient&) = delete;
     HTTPRemoteClient& operator=(const HTTPRemoteClient&) = delete;
 
-    const std::string& GetOrigin() const { return m_origin; }
-    const CService& GetPeer() const { return m_addr; }
+    HTTPServer::Id GetId() const { return m_id; }
+    const std::string& GetOrigin() const LIFETIMEBOUND { return m_origin; }
+    const CService& GetPeer() const LIFETIMEBOUND { return m_addr; }
     std::shared_ptr<Sock> GetSock() EXCLUSIVE_LOCKS_REQUIRED(!m_sock_mutex) { return WITH_LOCK(m_sock_mutex, return m_sock;); }
     bool ReadyToSend() const EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex) { return WITH_LOCK(m_send_mutex, return m_send_ready;); }
     bool ReceiveBufferEmpty() const { return m_recv_buffer.empty(); }
@@ -508,7 +509,7 @@ public:
     void Send(const HTTPResponse& res, std::span<const std::byte> reply_body, bool keep_alive) EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex, !m_sock_mutex);
     void Receive() EXCLUSIVE_LOCKS_REQUIRED(!m_sock_mutex);
 
-    bool MaybeDisconnect(std::chrono::time_point<SteadyClock> now, std::chrono::seconds rpcservertimeout, bool disconnect_all);
+    bool ShouldDisconnect(std::chrono::time_point<MockableSteadyClock> now, std::chrono::seconds rpcservertimeout, bool disconnect_all) const;
 
     /**
      * Try to read an HTTPRequest from a client's receive buffer.
@@ -529,10 +530,10 @@ public:
      * @returns nullptr after a complete request is moved to a worker thread,
      *          but before reading any new data from m_recv_buffer.
      */
-    const HTTPRequest* GetRequest() const { return m_req.get(); }
+    const HTTPRequest* GetRequest() const LIFETIMEBOUND { return m_req.get(); }
 
     //! Used for tests.
-    const std::string& GetRecvBuffer() const { return m_recv_buffer; }
+    const std::string& GetRecvBuffer() const LIFETIMEBOUND { return m_recv_buffer; }
 
 protected:
     //! Used for tests.
@@ -562,6 +563,9 @@ private:
      * and attempt to read HTTP requests from here.
      */
     std::string m_recv_buffer{};
+
+    //! Running total of bytes read from this client's socket.
+    uint64_t m_total_bytes_received{0};
 
     //! Requests from a client must be processed in the order in which
     //! they were received, blocking on a per-client basis. We read
@@ -631,7 +635,7 @@ private:
     //! Timestamp of last send or receive activity, used for -rpcservertimeout.
     //! Due to optimistic sends it may be updated in either a worker thread or in the
     //! I/O thread. It is checked in the I/O thread to disconnect idle clients.
-    std::atomic<SteadySeconds> m_idle_since;
+    std::atomic<MockableSteadyClock::time_point> m_idle_since;
 };
 
 /** Initialize HTTP server.
